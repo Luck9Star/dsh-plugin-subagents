@@ -3,7 +3,7 @@
 > 配套 `docs/DESIGN.md` 阅读。任务可独立派发给实现代理；每个任务自包含：目标 / 范围与涉及文件 / 验收标准 / 依赖。
 > 通用约束（每个任务默认遵守）：
 > - 设计红线见 DESIGN §9（relay 只读、天花板 fail closed、`--` 之后传任务文本、flag 值白名单、能力不匹配 loud error…）。
-> - 测试一律 `node:test` + fake（bridge/driver/ctx），**不依赖真实 CLI 与密钥**。
+> - 测试一律 `node:test` + fake（bridge/driver/ctx），**不依赖真实 CLI 与密钥**。前身 legacy-bridges-plugin 测试套件（60 例全绿）为**继承基线**：随迁用例不得削弱断言，新用例只增不改语义。
 > - 不修改两个前身仓库；迁移代码时保留原注释语义，只做设计文档要求的改名与扩展。
 > - 行为约定引用：`D` 表示 DESIGN.md 章节，`R` 表示风险项。
 
@@ -142,10 +142,10 @@ P5 质量与发布    T19 T20 T21                  （依赖全部）
 - **目标**：cwd 能力可分发、可重放，npx 缓存漂移可检测可修复（DESIGN §6.4 全部硬性要求；R1/R2）。
 - **范围/文件**：
   - `patches/01-in-process-driver.patch`、`patches/02-subagent-bundle.patch`：锚点与 rc.6 一致（自 legacy-cwd-plugin 照搬）。
-  - `patches/install.sh|ps1`（重写，不照搬前身根发现逻辑；**两段式、成败解耦**，DESIGN §6.4.2）：0. `resolve_live_root()`（POSIX：`which dsh` → realpath → 上溯至 `node_modules` 父目录 + 自证 `@deepseek-ai/dsh-subagent` 存在；Windows：`where dsh` shim 文本提取目标后同法；`DSH_HARNESS_ROOT` 显式覆盖）——**禁止硬编码路径、禁止 `ls | tail -1` 启发式**；A 段【强制先行】修复**两处** dsh-tools 符号链接（profile 与插件仓库 node_modules，均指向 live 根，吸收 fix-dsh-tools-dedupe.sh / link-harness-dsh-tools.sh 职责；`--links-only` 止于此）；B 段 cwd 补丁**四态状态机**逐枚判定（a 未打→应用；b 已打→幂等跳过；c 锚不在但含等价 cwd 合并→原生支持 no-op+提示+stamp 记 native；d 锚不在也无合并→loud 失败，**不阻塞/不影响 A 段结果**）；C 写 stamp `patches/.applied`（dsh 版本、live 根、A/B 各自结果、目标 mtime）。退出码：A 失败立即非零；B 状态 d 非零但输出说明链接已修复。
-  - `patches/verify.sh|ps1`（doctor，只读）：报告 (a) live 根、(b) 两枚补丁标记串就位、(c) 两处符号链接指向 live 根（readlink/realpath 比对）、(d) 仓库 `@deepseek-ai/dsh-subagent` 副本版本 vs live 根（仅 warning，§6.4.4）；任一漂移非零退出 + 一行修复提示。
+  - `patches/install.sh|ps1`（重写，不照搬前身根发现逻辑；**两段式、成败解耦**，DESIGN §6.4.2）：0. `resolve_live_root()`（POSIX：`which dsh` → realpath → 上溯至 `node_modules` 父目录 + 自证 `@deepseek-ai/dsh-subagent` 存在；Windows：`where dsh` shim 文本提取目标后同法；`DSH_HARNESS_ROOT` 显式覆盖）——**禁止硬编码路径、禁止 `ls | tail -1` 启发式**；A 段【强制先行】修复**两处** dsh-tools 符号链接（profile 与插件仓库 node_modules，均指向 live 根，吸收 fix-dsh-tools-dedupe.sh / link-harness-dsh-tools.sh 职责；`--links-only` 止于此）；B 段 cwd 补丁**四态状态机**逐枚判定（a 未打→应用；b 已打→幂等跳过；c **硬门控原生判定（双必要条件）**：锚不在时禁止全文 grep `request.cwd` 判据；条件 1 = `NATIVE_CWD_VERSIONS` 版本白名单（人工核实、初始为空），条件 2 = **install 路径强制行为探针**成功（经 `ctx.subagents.start` 起带 request.cwd 的最小子会话、允许即刻中断/处置、容忍无模型回复，断言 `header.cwd`；失败/不可执行 → 不记 native）；两门皆过才 no-op + stamp 记 **`native-verified`**（native driver 只认此态；`verify --probe` 为独立复检）；d 分两型 loud 失败且 remediation 分开：**d1 锚失配漂移**（→ 新版本插件重导补丁）/ **d2 白名单命中但探针未过**（→ 疑似误录，`verify --probe` 核实/更新清单）；**不阻塞/不影响 A 段结果**）；C 写 stamp `patches/.applied`（dsh 版本、live 根、A/B 各自结果、目标 mtime）。退出码：A 失败立即非零；B 状态 d 非零但输出说明链接已修复。
+  - `patches/verify.sh|ps1`（doctor，只读）：报告 (a) live 根、(b) 两枚补丁标记串就位 —— **两个不同文件两个不同合并点分别检查**：(b1) driver 独立包 `agents.create({meta})` 合并处、(b2) dsh-subagent bundle 内联 continuable 管理器 `create.meta` 合并处（内联边界见 DESIGN §2.1：continuable 管理器在 bundle、one-shot 驱动在独立包）、(c) 两处符号链接指向 live 根（readlink/realpath 比对）、(d) 仓库 `@deepseek-ai/dsh-subagent` 副本版本 vs live 根（仅 warning，§6.4.4）；任一漂移非零退出 + 一行修复提示。
   - `patches/uninstall.sh|ps1`：只还原补丁备份；**不回滚 A 段链接**（部署健康项，非插件私有状态，DESIGN §6.4.2 卸载注意）。
-- **验收**：假目录树测试：`resolve_live_root` 上溯算法（构造嵌套 node_modules）；B 段四态各自判定（含状态 c 原生支持降级 no-op 的构造样例）；**A/B 解耦**：B 段状态 d 时 A 段链接已修复且退出码非零、输出含说明；`--links-only` 只跑 A 段；install→verify(全绿)→uninstall（补丁还原、链接不动）→install 幂等往返；verify 对链接三态（正确/错根/悬空）判定正确且退出码符合；stamp 读写（含 native 态）；脚本内无硬编码 hash 路径（grep 断言）。
+- **验收**：假目录树测试：`resolve_live_root` 上溯算法（构造嵌套 node_modules）；B 段四态各自判定；**状态 c 双必要条件**：白名单空 → d1；白名单命中+探针过 → no-op+stamp `native-verified`；白名单命中+探针失败 → d2（不记 native，回归断言「误录白名单无法单独放行」）；构造「stock 无关代码含 request.cwd」样例必须**不**判 native（禁全文 grep 回归断言）；探针 stub 用例（fake 子会话 header.cwd 断言 通过/失败/不可执行 三态）；d1/d2 报错文案与 remediation 断言各自区分；**A/B 解耦**：B 段状态 d 时 A 段链接已修复且退出码非零、输出含说明；`--links-only` 只跑 A 段；install→verify(全绿)→uninstall（补丁还原、链接不动）→install 幂等往返；verify 对链接三态（正确/错根/悬空）判定正确且退出码符合；stamp 读写（含 native 态）；脚本内无硬编码 hash 路径（grep 断言）。
 - **依赖**：T08（driver 侧 stamp 消费）。
 
 ### T17 preset 适配脚本（L1/L2）

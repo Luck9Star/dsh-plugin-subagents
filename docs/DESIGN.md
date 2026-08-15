@@ -1,6 +1,6 @@
 # dsh-plugin-subagents — 统一子代理插件 · 架构设计
 
-> 状态：设计定稿（已含用户拍板的 4 项决策）。实现前请配合 `docs/TASKS.md` 阅读。
+> 状态：设计定稿（已含用户拍板的 4 项决策；补丁锚点归属已用会话直接证据闭合 —— 见 §2.1「内联边界实证」）。实现前请配合 `docs/TASKS.md` 阅读。
 > 前身：`legacy-cwd-plugin`（可配置原生子代理）+ `legacy-bridges-plugin`（外部 agent 桥接）。
 > 本文所有机制结论均来自对 rc.6 安装（`~/.npm/_npx/1e7f6d9597241db0/`）与两个前身仓库源码的实际阅读，关键依据随文标注。
 
@@ -58,6 +58,7 @@
   2. **仅 cwd 需要 2 枚补丁，且恰好各一处最小合并**：`SubagentStartRequest` 无 `cwd` 字段（`dsh-subagent/lib/types/types.d.ts` L91–L140），而 `CreateAgentOptions.meta.cwd` 是 dsh-session 认可的合法字段（`dsh-agent/lib/types/index.d.ts` L69–L80 "validated absolute cwd"）。两条建子路径都不把 per-call cwd 合进 `meta`：
      - 补丁 1（前台 one-shot）：`@deepseek-ai/dsh-subagent-in-process-driver/lib/index.js` 的 `agents.create({ meta })` 处（L181，`childSessionMeta` 合并点）合并 `request.cwd`。**stock 文件零 cwd 引用**（grep 实证，count=0）。
      - 补丁 2（continuable）：`@deepseek-ai/dsh-subagent/lib/index.js` **bundle**（注意 `lib/types/continuation.js` 不是运行实体 —— bundle 陷阱）的 `create.meta` 处（L806，锚 `meta: childSessionMeta(parent, childDepth, lineageSeedLength),`）同样合并。
+   **内联边界实证**（advisor 质疑「前景路径可能也被内联进 bundle」已排除）：`drivePublishedRun` 在 dsh-subagent bundle 中 **0 次出现**、在独立包 `dsh-subagent-in-process-driver/lib/index.js` 中 2 次 → 前景 one-shot 驱动逻辑**未被内联**，补丁 1 锚点（独立 driver 包）正确且是活跃代码；调用链：`dsh-subagent-spawn-in-process` / `dsh-subagent-fork-in-process`（原生 provider 包，dsh-base 宿主行挂载）→ 直接 import `dsh-subagent-in-process-driver` → `agents.create()`。即内联边界恰好是「**continuable 管理器在 bundle、one-shot 驱动在独立包**」，两枚补丁各打各的正确目标；doctor 的 anchor 检查必须**分别对两个不同文件、不同合并点**进行（§6.4.3）。
   3. **`resolveChildCwd` 是干扰项**：该函数（bundle L2129 定义、L2572 导出）只是导出给第三方插件用的工具函数，其语义是 **configured 覆盖**（来自插件 config，签名 `resolveChildCwd(prefix, configured, parentCwd)`），在 dsh-subagent bundle 内部**零调用点**（仅定义与导出两处命中）——**不得据此认为 rc.6 已支持 per-call cwd**。
   4. **设计含义**：统一插件 native 后端中，per-call 覆盖参数除 cwd 外**全部走原生 request 字段**（零补丁依赖）；cwd 走 `request.cwd` + 安装脚本打补丁（doctor 校验，§6.4）。若未来 dsh 原生支持 `request.cwd`，install/doctor 的锚点状态机会检测到并降级为 no-op + 提示（§6.4.2 状态 c）。
   - `install.sh/ps1`：锚定串替换、幂等、`.bak` 备份、`node --check` 验证、锚失配拒绝盲打。
@@ -212,7 +213,7 @@ interface SubagentDriver extends DriverInfo {
 ### 3.4 两后端如何映射到接口
 
 **NativeDriver（`lib/drivers/native.js`）**：
-- 包一层"请求组装器 + 结果 settle 器"，即 `legacy-cwd-plugin/lib/index.js` 的 execute 主体抽出为可复用模块（`resolvePersona`/`resolveModelRoute`/`assertCwd`/`settleForegroundRun`/`settleStart`/`stopReasonError` 迁入）。**零补丁原则**：per-call `agentOptions`/`persona`/`toolFilter`（及 `maxDepth`/`label`）全部走 rc.6 原生 request 字段（§2.1 证据链第 1 条）；仅 `cwd` 依赖 `request.cwd` 透传 + §6.4 补丁（stamp/`native` 态放行）。
+- 包一层"请求组装器 + 结果 settle 器"，即 `legacy-cwd-plugin/lib/index.js` 的 execute 主体抽出为可复用模块（`resolvePersona`/`resolveModelRoute`/`assertCwd`/`settleForegroundRun`/`settleStart`/`stopReasonError` 迁入）。**零补丁原则**：per-call `agentOptions`/`persona`/`toolFilter`（及 `maxDepth`/`label`）全部走 rc.6 原生 request 字段（§2.1 证据链第 1 条）；仅 `cwd` 依赖 `request.cwd` 透传 + §6.4 补丁（stamp 的 **`native-verified`** 态放行；该态仅经 §6.4.2 白名单 + install 强制探针双必要条件写入，stamp 因门控可信）。
 - `capabilities`：`{ cwd: true, persona: true, toolFilter: true, llmRoute: true, maxDepth: true, continuable: true, backgroundJob: true, durableResume: true }`；fork 实例 `inheritsParentContext: true`。
 - `progress`：session 折叠（复用 `lib/progress.js` 的 `foldProgress/foldTrace/foldTokenUsage`，native 子代理的 session 事件同样可折）+ `ctx.subagents.listChildren`。
 - 补丁就位检测：首次使用 `cwd` 时 grep 实例内 `dsh-subagent-in-process-driver` 是否含 `request.cwd` 标记（或记录安装脚本写入的 stamp 文件），未就位 → 明确错误指引跑 `patches/install`。
@@ -462,11 +463,27 @@ B. cwd 补丁【能力段，四态状态机逐枚独立判定】
    目标 = <root>/node_modules/@deepseek-ai/{dsh-subagent-in-process-driver,dsh-subagent}/lib/index.js
    - 状态 a（未打）：锚串在、补丁标记（request.cwd 合并式）不在 → 应用（.bak 备份、锚定替换、打后 node --check）
    - 状态 b（已打，幂等）：标记在且 .bak 存在 → 跳过
-   - 状态 c（前瞻分支：dsh 已原生支持）：锚串不在、但目标区域含等价 cwd 合并（stock 自带
-     request.cwd / meta.cwd 转发）→ 判为原生支持，no-op + 显式提示「本 dsh 版本已原生转发
-     per-call cwd，无需补丁」，stamp 记 native（native driver 的 cwd 能力检测据此直接放行）
-   - 状态 d（版本漂移）：锚串不在、也无 cwd 合并 → 大声失败并给指引（检查新版本插件 release /
-     issue），绝不盲打 —— 本枚/本段失败不影响 A 段已完成的结果
+   - 状态 c（前瞻分支：dsh 已原生支持 —— **硬门控，防误报**）：锚串不在时已无锚可定位「目标区域」，
+     **全文 grep `request.cwd`/`meta.cwd` 禁止作为判据**（未来 stock 只要在无关代码引用 cwd 即会误判
+     native → stamp 记 native → driver 放行 → per-call cwd 静默失效——恰是 R1 要消灭的失效面）。双门皆为
+     **必要条件、缺一不记 native**，fail closed（「宁可误报漂移，不可误报 native」由双闸强制成立）：
+     门 1（版本白名单，静态）：`NATIVE_CWD_VERSIONS` —— 人工核实「原生转发 request.cwd」的 dsh 版本
+       下限清单，随插件 release 更新，**初始为空**（rc.6 不支持）。版本不在白名单 → 状态 d1。
+     门 2（行为探针，动态，**install 路径强制**）：实际经 subagent 路径（`ctx.subagents.start`，允许
+       创建后即刻中断/处置、容忍无模型回复，成本≈一次最小会话创建）起一个带 `request.cwd` 的最小
+       子会话，断言子会话 `header.cwd` === 请求值 —— 行为级判定，不依赖文本形状。install 本就运行在
+       live 环境，探针是 native 判定的最后一道闸：**白名单命中但探针失败/不可执行 → 不记 native**，
+       落状态 d2 loud —— 白名单人为误录（列入了实际不转发的版本）无法经新门重开静默失效面。
+       `verify --probe` 保留为**独立深检**（复跑同一探针，供事后复核）。
+     两门皆过才 no-op + 显式提示 + stamp 记 **`native-verified`** —— native driver **只认该态**
+     （纯白名单命中不产生任何 driver 信任态）。白名单空窗期与白名单误录分别表现为 d1/d2 的 loud
+     失败，驱动核实更新而非静默降级。
+   - 状态 d（loud 失败，绝不盲打；**两型 remediation 必须分开报出**）：
+     d1（锚失配漂移）：锚串不在且版本不在白名单 → 「dsh 版本漂移、补丁锚点失效，需新版本插件重导
+        补丁」→ 检查插件 release / issue；
+     d2（白名单未证实）：版本在白名单但探针失败或未能执行 → 「疑似白名单误录或探针环境异常，
+        可能已原生支持」→ 跑 `verify --probe` 核实 / 提交 issue 更新清单；
+     —— 本枚/本段失败不影响 A 段已完成的结果
 C. stamp：<pkg>/patches/.applied（dsh 版本、live 根路径、A/B 各自结果、目标文件 mtime）
    —— native driver 的 cwd 能力检测优先读 stamp（§3.4）
 ```
@@ -482,7 +499,7 @@ C. stamp：<pkg>/patches/.applied（dsh 版本、live 根路径、A/B 各自结�
 | 检查项 | 判定 |
 |---|---|
 | (a) live 根路径 | `resolve_live_root()` 成功并打印 |
-| (b) 两枚 cwd 补丁在该根就位 | 按状态机（§6.4.2）逐枚汇报：`applied` / `native`（dsh 已原生支持，no-op）/ `missing`（→ `重跑 patches/install`）/ `drift`（锚失配 → 版本漂移，非零退出） |
+| (b) 两枚 cwd 补丁在该根就位（**两个不同文件、两个不同合并点分别检查**） | 按状态机（§6.4.2）逐枚汇报：(b1) driver 独立包 `dsh-subagent-in-process-driver/lib/index.js` 的 `agents.create({ meta })` 合并处；(b2) `dsh-subagent/lib/index.js` **bundle** 内联 continuable 管理器的 `create.meta` 合并处。各报 `applied` / `native-verified`（**白名单 + install 探针双必要条件**，`--probe` 可独立复检，no-op）/ `missing`（→ `重跑 patches/install`）/ `drift-anchor`（d1：锚失配且不在白名单 → 需新版本插件重导补丁，非零退出）/ `unverified-native`（d2：白名单命中但探针未过 → 跑 `verify --probe` 核实/更新清单，非零退出）—— d1/d2 文案与修复指引必须分开 |
 | (c) 两处 dsh-tools 符号链接指向 live 根 | readlink 与 `<root>/…/dsh-tools` 的 realpath 比对；悬空/错根 → `重跑 patches/install`（其第 3 步修复） |
 | (d)（附赠）插件仓库 `@deepseek-ai/dsh-subagent` 副本版本 vs live 根版本 | 不一致仅 **warning**（见 §6.4.4 的定案：纯函数导入下不致命） |
 
@@ -579,7 +596,7 @@ dsh-plugin-subagents/
 
 | # | 风险 | 依据 | 缓解 |
 |---|---|---|---|
-| R1 | **cwd 补丁双重失效面**：(i) rc.6 锚点耦合（dsh 升级改写 bundle → 锚失配）；(ii) **npx 缓存漂移**（`~/.npm/_npx/` 已有 10 个 hash 目录，重解析后 live 根静默切换，旧根补丁被弃用且无报错） | §2.1；§2.4-1 实测 | install B 段四态状态机（§6.4.2：which-dsh 动态解析根 → 逐枚判定 a/b/c/d；d 漂移 loud、c 原生支持降级 no-op）；verify 体检（§6.4.3 检查 b）非零退出 + 修复提示；启动时 cwd 能力检测（stamp 优先）给指引；README 失效模式必写（§6.4.5）；发布流程含新版本锚点验证任务 |
+| R1 | **cwd 补丁双重失效面**：(i) rc.6 锚点耦合（dsh 升级改写 bundle → 锚失配）；(ii) **npx 缓存漂移**（`~/.npm/_npx/` 已有 10 个 hash 目录，重解析后 live 根静默切换，旧根补丁被弃用且无报错） | §2.1；§2.4-1 实测 | install B 段四态状态机（§6.4.2：which-dsh 动态解析根 → 逐枚判定 a/b/c/d；d 漂移 loud；**c 原生支持降级须白名单 + install 强制行为探针双必要条件（stamp 只记 `native-verified`，白名单误录无法单独放行；d1/d2 分型报出不同 remediation），锚失配后禁止全文 grep 判据** —— 防「误判 native → stamp 放行 → cwd 静默失效」的假阴性面）；verify 体检（§6.4.3 检查 b）非零退出 + 修复提示；启动时 cwd 能力检测（stamp 优先）给指引；README 失效模式必写（§6.4.5）；发布流程含新版本锚点验证任务 |
 | R2 | **dsh-tools 双实例 Symbol 陷阱**：`TOOL_RUNTIME_SCHEDULER` 模块级 Symbol，第二物理副本 → 所有工具调用死 `reading 'prepare'`；且漂移面有**两处**链接（profile + 插件仓库），npx 换 hash 后双双悬空；旧 dedupe 脚本 `ls \| tail -1` 选根不保证是运行根 | §2.4-2/4 实测；legacy-bridges-plugin `scripts/link-harness-dsh-tools.sh` 注释 | install **A 段强制先行**修复两处链接，先于补丁、不受补丁失败阻塞（§6.4.2 两段式；根来源 = which-dsh 解析，非启发式 §6.4.1；`--links-only` 供只要 dedupe 不要 cwd 的场景）；verify 检查 c；README 安装第 3 步标注必跑；`apply()` 启动自检：本实例 Symbol 取 scheduler 为 undefined → logger.fatal 指引 dedupe |
 | R3 | **bundle（patch 层）与 host-plane 双机制维护成本**：disable 依赖行 id 稳定性；web-app 层序假设 | §2.3-A/C | patch 只引用 `dsh-base` 行 id（`tool-subagent`/`tool-subagent-fork`，rc 内稳定）；CI 加 `dsh --dump-config` 冒烟（可选）；每次 dsh 升级跑回归清单（TASKS T19） |
 | R4 | **工具名接管冲突**：与 legacy-cwd-plugin/tools 双装 → 全局层 `subagent` duplicate error；与旧 legacy-bridges-plugin 双装 → provider 名 duplicate error | §4.3 | fail loud 本身是强制互斥（可接受）；README "二选一"表 + 安装命令里显式卸载步骤；错误信息可读化 |
