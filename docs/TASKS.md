@@ -138,10 +138,14 @@ P5 质量与发布    T19 T20 T21                  （依赖全部）
 - **验收**：YAML 可解析为 loader patch 列表（用 cordis loader 方言的 `!!js` 不出现，纯静态）；行 id 与 dsh-base 完全一致（对照 `dsh-base/cordis.patch.yml` 断言，写一个 node:test 校验文件内容）。
 - **依赖**：T14（包名/config 形状定稿）。
 
-### T16 cwd 补丁与安装脚本
-- **目标**：cwd 能力可分发、可重放（R1）。
-- **范围/文件**：`patches/01-in-process-driver.patch`、`patches/02-subagent-bundle.patch`、`patches/install.sh|ps1`、`patches/uninstall.sh|ps1` ← 自 legacy-cwd-plugin 照搬，扩展：写 `patches/.applied` stamp（dsh 版本、目标文件 mtime）；锚点与 rc.6 一致。
-- **验收**：在临时复制的假目录树上跑 install→verify→uninstall→reinstall 幂等往返（测试内构造锚文本文件）；stamp 读写用例。
+### T16 cwd 补丁、live 根管理与 install/verify 脚本
+- **目标**：cwd 能力可分发、可重放，npx 缓存漂移可检测可修复（DESIGN §6.4 全部硬性要求；R1/R2）。
+- **范围/文件**：
+  - `patches/01-in-process-driver.patch`、`patches/02-subagent-bundle.patch`：锚点与 rc.6 一致（自 legacy-cwd-plugin 照搬）。
+  - `patches/install.sh|ps1`（重写，不照搬前身根发现逻辑；**两段式、成败解耦**，DESIGN §6.4.2）：0. `resolve_live_root()`（POSIX：`which dsh` → realpath → 上溯至 `node_modules` 父目录 + 自证 `@deepseek-ai/dsh-subagent` 存在；Windows：`where dsh` shim 文本提取目标后同法；`DSH_HARNESS_ROOT` 显式覆盖）——**禁止硬编码路径、禁止 `ls | tail -1` 启发式**；A 段【强制先行】修复**两处** dsh-tools 符号链接（profile 与插件仓库 node_modules，均指向 live 根，吸收 fix-dsh-tools-dedupe.sh / link-harness-dsh-tools.sh 职责；`--links-only` 止于此）；B 段 cwd 补丁**四态状态机**逐枚判定（a 未打→应用；b 已打→幂等跳过；c 锚不在但含等价 cwd 合并→原生支持 no-op+提示+stamp 记 native；d 锚不在也无合并→loud 失败，**不阻塞/不影响 A 段结果**）；C 写 stamp `patches/.applied`（dsh 版本、live 根、A/B 各自结果、目标 mtime）。退出码：A 失败立即非零；B 状态 d 非零但输出说明链接已修复。
+  - `patches/verify.sh|ps1`（doctor，只读）：报告 (a) live 根、(b) 两枚补丁标记串就位、(c) 两处符号链接指向 live 根（readlink/realpath 比对）、(d) 仓库 `@deepseek-ai/dsh-subagent` 副本版本 vs live 根（仅 warning，§6.4.4）；任一漂移非零退出 + 一行修复提示。
+  - `patches/uninstall.sh|ps1`：只还原补丁备份；**不回滚 A 段链接**（部署健康项，非插件私有状态，DESIGN §6.4.2 卸载注意）。
+- **验收**：假目录树测试：`resolve_live_root` 上溯算法（构造嵌套 node_modules）；B 段四态各自判定（含状态 c 原生支持降级 no-op 的构造样例）；**A/B 解耦**：B 段状态 d 时 A 段链接已修复且退出码非零、输出含说明；`--links-only` 只跑 A 段；install→verify(全绿)→uninstall（补丁还原、链接不动）→install 幂等往返；verify 对链接三态（正确/错根/悬空）判定正确且退出码符合；stamp 读写（含 native 态）；脚本内无硬编码 hash 路径（grep 断言）。
 - **依赖**：T08（driver 侧 stamp 消费）。
 
 ### T17 preset 适配脚本（L1/L2）
@@ -153,7 +157,7 @@ P5 质量与发布    T19 T20 T21                  （依赖全部）
 ### T18 README 安装/互斥/矩阵文档
 - **目标**：README.md + README.zh.md 覆盖 DESIGN §4.2 矩阵、§4.3 互斥、§6.5 流程。
 - **范围/文件**：`README.md`、`README.zh.md`（同步）、`CHANGELOG.md`（0.1.0 条目）、`AGENTS.md`（红线继承 DESIGN §9）、`SECURITY.md`。
-- **验收**：含"二选一"表（对 legacy-cwd-plugin / dsh-subagent-tools / 旧 legacy-bridges-plugin）；升级重放清单（dedupe → patches → 重启）；中英对照齐全。
+- **验收**：含"二选一"表（对 legacy-cwd-plugin / dsh-subagent-tools / 旧 legacy-bridges-plugin）；升级/漂移重放清单（重跑 patches/install → verify → 重启）；**npx 缓存漂移失效模式专节**（DESIGN §6.4.5：换根后 cwd 静默失效 / 工具调用全挂 reading 'prepare'，任一症状重跑 install 或先 verify）+ dsh-subagent 导入白名单决策说明（§6.4.4）；中英对照齐全。
 - **依赖**：T15、T16、T17。
 
 ---
@@ -168,8 +172,8 @@ P5 质量与发布    T19 T20 T21                  （依赖全部）
 
 ### T20 CI 与 lint
 - **目标**：三平台 × Node 18/20/22 绿。
-- **范围/文件**：`.github/workflows/ci.yml`（沿 legacy-bridges-plugin：macOS/Ubuntu/Windows × 18/20/22，`npm ci && npm run lint && npm test`）、`publish.yml`、`scripts/lint.js`（node --check 全模块）。
-- **验收**：CI 首跑绿；无真实 CLI 依赖（runner 裸机可过）。
+- **范围/文件**：`.github/workflows/ci.yml`（沿 legacy-bridges-plugin：macOS/Ubuntu/Windows × 18/20/22，`npm ci && npm run lint && npm test`）、`publish.yml`、`scripts/lint.js`（node --check 全模块 + **`@deepseek-ai/dsh-subagent` 导入白名单检查** `{ assertSubagentMaxDepth, settleRun }`，DESIGN §6.4.4/红线 12）。
+- **验收**：CI 首跑绿；无真实 CLI 依赖（runner 裸机可过）；lint 对越白名单导入的样例文件报错（测试内嵌正/反例）。
 - **依赖**：T14。
 
 ### T21 发布准备

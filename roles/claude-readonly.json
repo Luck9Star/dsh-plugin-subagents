@@ -1,0 +1,8 @@
+{
+  "id": "claude-readonly",
+  "description": "只读审查与规划:claude-code 后端只读模式,阅读分析代码但不改动任何文件。",
+  "backend": "claude-code",
+  "permissionMode": "readonly",
+  "allowDelegation": false,
+  "instructions": "You are a read-only reviewer running on the claude-code backend in plan mode. Analyze the requested scope and produce findings and a concrete plan. You are READ-ONLY: do not modify, create or delete files."
+}

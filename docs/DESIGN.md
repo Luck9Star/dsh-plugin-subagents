@@ -53,9 +53,13 @@
   - per-call 覆盖：`persona`（`@preset:<id|显示名>` 从 `<dshHome>/.agent-presets/<id>/agent.cordis.yml` 读 `id: persona` 行的 `config.text`）、`model`（`resolveModelRoute` 拆 `provider/model`）、`toolFilter`、`provider`、`cwd`（`assertCwd`：绝对路径 + 可访问目录）。
   - 路由：`resolveDelegationRun` → 前台 `ctx.subagents.start` + `settleForegroundRun`；一次性后台经 `ctx.get('jobs')` 包 `SubagentRun`；可续续走 `ctx.subagents.startContinuable` 返回 `childId`。
   - 挂载模式：监听 `subagent/provider-added|removed` 事件惰性 mount/unmount 工具（Cordis 并行加载下注册顺序不可假设 —— 官方 dsh-subagent README L95 同样强调）。
-- **cwd 补丁**（`patches/01-in-process-driver.patch`、`02-subagent-bundle.patch`）：`SubagentStartRequest` 无 `cwd` 字段（已核实 `dsh-subagent/lib/types/types.d.ts` L91–L140），而 `CreateAgentOptions.meta.cwd` 是 dsh-session 认可的合法字段（`dsh-agent/lib/types/index.d.ts` L69–L80 "validated absolute cwd"）。补丁仅把 `request.cwd` 透传进两条建子路径的 `meta`：
-  - 前台：`@deepseek-ai/dsh-subagent-in-process-driver/lib/index.js` L181（`childSessionMeta` 合并点）；
-  - 可续续：`@deepseek-ai/dsh-subagent/lib/index.js` **bundle 内联的 continuation manager**（L806 附近；注意 `lib/types/continuation.js` 不是运行实体 —— bundle 陷阱）。
+- **cwd 补丁必要性 —— 精确证据链**（本节为本设计对 rc.6 的定案依据，全部实读核实）：
+  1. **per-call `model`/`provider`/`persona`/`toolFilter` 在 rc.6 原生支持、无需补丁**：continuable 创建路径直接消费 `request.agentOptions`（经 `resolveChildAgentOptions(parent, request.agentOptions, childDepth)`）、`request.persona`、`request.toolFilter`（`dsh-subagent/lib/index.js` L778–L815：descriptor 快照 + `agentOptions` 解析 + `composition: { persona, toolFilter }`）；one-shot 路径同理（in-process-driver）。工具层传普通对象即可 —— **请求对象不做严格字段校验**（多余字段原样透传，subagent-cwd 已在 rc.6 实证 `request.cwd` 能穿透到 provider）。
+  2. **仅 cwd 需要 2 枚补丁，且恰好各一处最小合并**：`SubagentStartRequest` 无 `cwd` 字段（`dsh-subagent/lib/types/types.d.ts` L91–L140），而 `CreateAgentOptions.meta.cwd` 是 dsh-session 认可的合法字段（`dsh-agent/lib/types/index.d.ts` L69–L80 "validated absolute cwd"）。两条建子路径都不把 per-call cwd 合进 `meta`：
+     - 补丁 1（前台 one-shot）：`@deepseek-ai/dsh-subagent-in-process-driver/lib/index.js` 的 `agents.create({ meta })` 处（L181，`childSessionMeta` 合并点）合并 `request.cwd`。**stock 文件零 cwd 引用**（grep 实证，count=0）。
+     - 补丁 2（continuable）：`@deepseek-ai/dsh-subagent/lib/index.js` **bundle**（注意 `lib/types/continuation.js` 不是运行实体 —— bundle 陷阱）的 `create.meta` 处（L806，锚 `meta: childSessionMeta(parent, childDepth, lineageSeedLength),`）同样合并。
+  3. **`resolveChildCwd` 是干扰项**：该函数（bundle L2129 定义、L2572 导出）只是导出给第三方插件用的工具函数，其语义是 **configured 覆盖**（来自插件 config，签名 `resolveChildCwd(prefix, configured, parentCwd)`），在 dsh-subagent bundle 内部**零调用点**（仅定义与导出两处命中）——**不得据此认为 rc.6 已支持 per-call cwd**。
+  4. **设计含义**：统一插件 native 后端中，per-call 覆盖参数除 cwd 外**全部走原生 request 字段**（零补丁依赖）；cwd 走 `request.cwd` + 安装脚本打补丁（doctor 校验，§6.4）。若未来 dsh 原生支持 `request.cwd`，install/doctor 的锚点状态机会检测到并降级为 no-op + 提示（§6.4.2 状态 c）。
   - `install.sh/ps1`：锚定串替换、幂等、`.bak` 备份、`node --check` 验证、锚失配拒绝盲打。
 - **已知缺口**：README 提到 `install-preset.sh` 但仓库只有 `install-preset.ps1`（POSIX 版缺失）；preset 适配只支持 `standard` 源。
 
@@ -88,6 +92,15 @@
 **E. 子代理 seam 契约**（`@deepseek-ai/dsh-subagent/lib/types/types.d.ts`）：`SubagentProvider = { name, capabilities:{outputSchema,depthLimit,toolFilter,persona}, inheritsParentContext, start(request)→SubagentRun, prepareContinuable?(request)→{seed} }`；`SubagentRun = { id, localAgent, result:Promise<SubagentResult>, dispose() }`；`startContinuable({provider,label,request,signal})→{childId,messageId}`；`followup/interrupt/reportFrom/listChildren/listDescendants`；事件 `subagent/start|end`（一次性运行与可续续 epoch 同词汇）、`subagent/provider-added|removed`。**continuable 子代理由 continuation manager 全权拥有，provider 只提供 `{seed}`** —— relay 模型的正当地位来自此：bridge provider 在 `prepareContinuable` 里建远端会话与 binding，之后子代理的回合由 manager 驱动。
 
 **F. `provider` 名称空间是进程级唯一的**：`registerProvider` 重名 fail loud。rc.6 安装内无官方 `codex`/`claude-code` provider（仅有 spawn/fork in-process），standard preset 里 `tool-subagent-codex` 等禁用行注释明确期待宿主面产品 provider 挂这些名 —— 本插件沿用裸名 `codex`/`claude-code`/`acp` 与 `config.providers` 键名。
+
+### 2.4 运行时加载事实（npx 缓存漂移模型，已实机核实）
+
+安装/补丁章节（§6.4–§6.5）与风险 R1/R2 的地基，全部为本机实测：
+
+1. **live dsh = npx 缓存根** `~/.npm/_npx/1e7f6d9597241db0/`。`which dsh` → `<root>/node_modules/.bin/dsh`（符号链接）→ realpath → `<root>/node_modules/@deepseek-ai/dsh/lib/bin.js`。`~/.npm/_npx/` 下另有 **10 个 hash 目录**（外加 `bin`）——npx 重新解析依赖或缓存清理会**静默切换根目录**：旧根里打好的 cwd 补丁被整体弃用，**无任何报错**。
+2. **profile 树只有一枚符号链接**：`~/.dsh/profiles/web/node_modules/@deepseek-ai/` 仅 `dsh-tools` → npx 根。现有 `fix-dsh-tools-dedupe.sh` 用 `ls ~/.npm/_npx/*/... | tail -1` 选副本——**字典序最后一个，不保证是 `which dsh` 实际运行的根**，启发式脆弱。
+3. **插件仓库存在 `@deepseek-ai/*` 实体副本**（`legacy-bridges-plugin/node_modules/@deepseek-ai/` 下 18 个包：dsh-subagent、dsh-agent、dsh-session…，仅 `dsh-tools` 是指向 harness 的符号链接；npm ≥7 自动装 peer 所致）。⇒ 运行时**存在两份 `dsh-subagent` 模块实例**：harness 的（npx 根，提供 `ctx.subagents` 服务）与插件仓库的（插件 import 的解析目标）。cwd 补丁只需打在 **harness 侧副本**（npx 根）：子会话创建发生在 harness 的 `ctx.subagents` 服务里，插件仓库副本与 cwd 转发无关。
+4. **dsh-tools 单实例 Symbol 约束**（R2）：profile 与插件仓库**两处** `dsh-tools` 符号链接都必须指向 live npx 根；npx 换 hash 后链接悬空 → 所有工具调用报 `Cannot read properties of undefined (reading 'prepare')`。
 
 ---
 
@@ -199,7 +212,7 @@ interface SubagentDriver extends DriverInfo {
 ### 3.4 两后端如何映射到接口
 
 **NativeDriver（`lib/drivers/native.js`）**：
-- 包一层"请求组装器 + 结果 settle 器"，即 `legacy-cwd-plugin/lib/index.js` 的 execute 主体抽出为可复用模块（`resolvePersona`/`resolveModelRoute`/`assertCwd`/`settleForegroundRun`/`settleStart`/`stopReasonError` 迁入）。
+- 包一层"请求组装器 + 结果 settle 器"，即 `legacy-cwd-plugin/lib/index.js` 的 execute 主体抽出为可复用模块（`resolvePersona`/`resolveModelRoute`/`assertCwd`/`settleForegroundRun`/`settleStart`/`stopReasonError` 迁入）。**零补丁原则**：per-call `agentOptions`/`persona`/`toolFilter`（及 `maxDepth`/`label`）全部走 rc.6 原生 request 字段（§2.1 证据链第 1 条）；仅 `cwd` 依赖 `request.cwd` 透传 + §6.4 补丁（stamp/`native` 态放行）。
 - `capabilities`：`{ cwd: true, persona: true, toolFilter: true, llmRoute: true, maxDepth: true, continuable: true, backgroundJob: true, durableResume: true }`；fork 实例 `inheritsParentContext: true`。
 - `progress`：session 折叠（复用 `lib/progress.js` 的 `foldProgress/foldTrace/foldTokenUsage`，native 子代理的 session 事件同样可折）+ `ctx.subagents.listChildren`。
 - 补丁就位检测：首次使用 `cwd` 时 grep 实例内 `dsh-subagent-in-process-driver` 是否含 `request.cwd` 标记（或记录安装脚本写入的 stamp 文件），未就位 → 明确错误指引跑 `patches/install`。
@@ -416,9 +429,79 @@ strict：未知键 fail loud（含中文报错文案沿 legacy-bridges-plugin �
 **L2（opt-in，`--enhance-rows`，服务 orchestrator 类 preset）**：把副本中所有 `name: '@deepseek-ai/dsh-tool-subagent'` 行改写为 `name: 'dsh-plugin-subagents'` + 追加 `presetRow: true`。本插件 apply() 在 presetRow 模式下：只注册该行 `toolName` 的工具（native 语义 + 全部 per-call 增强 + cwd），不注册 provider / 辅助工具 / 不读 bridge 配置（provider 由全局实例注册，seam 是进程级服务，跨实例解析无碍；全局实例缺失时 bridge 委派给明确错误）。**多 presetRow 实例并存安全**：无 provider 重名注册、无辅助工具重名注册、registry/binding 仅全局实例持有。
    —— 保留用户 orchestrator preset 的"每行一个 (角色,模型) 组合"模式并获得 cwd/@preset/per-call 增强。
 
-### 6.4 cwd 补丁分发（照搬 ship，两平台补齐）
+### 6.4 cwd 补丁与 live 根管理（install / verify 双模式，两平台补齐）
 
-`patches/01-in-process-driver.patch` + `patches/02-subagent-bundle.patch` + `install.sh|ps1` + `uninstall.sh|ps1`：锚定替换、幂等、`.bak`、`node --check`、锚失配拒绝。目标与锚点与 rc.6 完全一致（§2.1）。安装脚本顺带写 stamp（`<pkg>/patches/.applied`，记录 dsh 版本与目标文件 mtime），native driver 的 `cwd` 能力检测优先读 stamp。
+补丁本体（`patches/01-in-process-driver.patch`、`patches/02-subagent-bundle.patch`）目标与锚点与 rc.6 完全一致（§2.1），但安装脚本**不再照搬**前身的根发现方式 —— 依 §2.4 的漂移模型重构为下述硬性要求（红线 11）。
+
+#### 6.4.1 live 根动态解析（禁止硬编码、禁止启发式）
+
+```
+resolve_live_root():
+  bin   = which dsh                      # POSIX；Windows: where dsh 定位 shim
+  real  = realpath(bin)                  # <root>/node_modules/.bin/dsh → …/@deepseek-ai/dsh/lib/bin.js
+  自 real 逐级上溯，遇第一个名为 node_modules 的目录 → root = 其父目录
+  自证：root/node_modules/@deepseek-ai/dsh-subagent 存在，否则 loud 失败
+  显式覆盖：DSH_HARNESS_ROOT 环境变量优先（exotic 启动方式兜底）
+```
+
+- Windows：`where dsh` 得 `.cmd/.ps1` shim，从 shim 文本提取目标 `bin.js` 路径后同法上溯（npm shim 内含相对目标路径）。
+- **明令禁止**：硬编码 hash 路径；`ls ~/.npm/_npx/*/... | tail -1` 之类选根启发式（§2.4-2 已证其脆弱）。
+
+#### 6.4.2 install 模式（两段式：链接修复强制先行，补丁段独立成败）
+
+`patches/install.sh [--links-only]`。两个关注点**成败解耦**：dsh-tools 单实例（R2 硬失效缓解 —— 挂了所有工具调用全死）与 cwd 补丁（R1 可选能力）不是一件事，**前者的执行不得被后者的失败阻塞**（旧流程的 fix-dsh-tools-dedupe.sh 是独立常跑步骤，吸收其职责时保持这一性质）：
+
+```
+0. resolve_live_root()（失败 → 立即非零退出，两段都做不了）
+A. dsh-tools 符号链接修复【强制段，先于补丁】
+   两处 —— profile node_modules/@deepseek-ai/dsh-tools 与插件仓库 node_modules/@deepseek-ai/dsh-tools
+   —— 均指向 <root>/node_modules/@deepseek-ai/dsh-tools（先删旧链接/副本再建；realpath 相同则跳过）。
+   根来源 = resolve_live_root()（非 ls|tail -1 启发式）。吸收 fix-dsh-tools-dedupe.sh 与
+   scripts/link-harness-dsh-tools.sh 职责。`--links-only` 到此为止。
+B. cwd 补丁【能力段，四态状态机逐枚独立判定】
+   目标 = <root>/node_modules/@deepseek-ai/{dsh-subagent-in-process-driver,dsh-subagent}/lib/index.js
+   - 状态 a（未打）：锚串在、补丁标记（request.cwd 合并式）不在 → 应用（.bak 备份、锚定替换、打后 node --check）
+   - 状态 b（已打，幂等）：标记在且 .bak 存在 → 跳过
+   - 状态 c（前瞻分支：dsh 已原生支持）：锚串不在、但目标区域含等价 cwd 合并（stock 自带
+     request.cwd / meta.cwd 转发）→ 判为原生支持，no-op + 显式提示「本 dsh 版本已原生转发
+     per-call cwd，无需补丁」，stamp 记 native（native driver 的 cwd 能力检测据此直接放行）
+   - 状态 d（版本漂移）：锚串不在、也无 cwd 合并 → 大声失败并给指引（检查新版本插件 release /
+     issue），绝不盲打 —— 本枚/本段失败不影响 A 段已完成的结果
+C. stamp：<pkg>/patches/.applied（dsh 版本、live 根路径、A/B 各自结果、目标文件 mtime）
+   —— native driver 的 cwd 能力检测优先读 stamp（§3.4）
+```
+
+退出码：0 = A+B 全成或全幂等；非零 = A 段失败（致命，立即退出）或 B 段出现状态 d（漂移 loud；此时 A 段已完成，输出明确说明「链接已修复、仅补丁未打」）。
+
+> 卸载注意：`uninstall` 只还原补丁备份，**不回滚 A 段链接** —— 链接指向 live harness 根，是部署健康项而非本插件的私有状态（回滚反而会重新引入双实例风险）。
+
+#### 6.4.3 verify（doctor）模式：`patches/verify.sh|ps1`
+
+只读体检，逐项打印并汇总，**任一漂移 → 非零退出 + 一行修复提示**：
+
+| 检查项 | 判定 |
+|---|---|
+| (a) live 根路径 | `resolve_live_root()` 成功并打印 |
+| (b) 两枚 cwd 补丁在该根就位 | 按状态机（§6.4.2）逐枚汇报：`applied` / `native`（dsh 已原生支持，no-op）/ `missing`（→ `重跑 patches/install`）/ `drift`（锚失配 → 版本漂移，非零退出） |
+| (c) 两处 dsh-tools 符号链接指向 live 根 | readlink 与 `<root>/…/dsh-tools` 的 realpath 比对；悬空/错根 → `重跑 patches/install`（其第 3 步修复） |
+| (d)（附赠）插件仓库 `@deepseek-ai/dsh-subagent` 副本版本 vs live 根版本 | 不一致仅 **warning**（见 §6.4.4 的定案：纯函数导入下不致命） |
+
+#### 6.4.4 定案：本插件对 `@deepseek-ai/dsh-subagent` 的 import 解析 —— 纯函数白名单，不纳入 symlink 去重
+
+运行时确有两份 dsh-subagent 实例（§2.4-3）。二选一定案如下：
+
+**选 A（定案）：约束只 import 纯函数** —— 现状 `assertSubagentMaxDepth` / `settleRun` 即是（参数校验与结果归一化，无模块态、无 Symbol 身份、无 `instanceof`）；一切服务访问走 `ctx`（宿主实例），Branded 类型是类型级的（运行时即 string）。
+
+理由：
+1. **失效模式不对称**：实体副本过期 → 纯函数依旧正确（peerDependencies 锁版本族），插件照常加载；若改成 symlink 而 npx 换 hash → **悬空链接 → 模块找不到 → 整个插件加载失败**。选 B 会把全系统最脆的失效模式（§2.4-4）主动引入 dsh-subagent。
+2. **维护面更小**：少一枚需要双向维护（profile + 仓库，且每次仓库 `npm install` 都会重建 node_modules）的链接。
+3. **可升级路径明确**：若未来需要导入有状态/身份敏感符号（如 descriptor 校验器），届时把 `dsh-subagent` 加入 §6.4.2 第 3 步的去重清单并在 doctor 增检 —— 本节即该升级的触发记录。
+
+**约束机制**（防未来无意破约）：`scripts/lint.js` 增加静态检查 —— 本插件源码从 `@deepseek-ai/dsh-subagent` 导入的符号必须落在白名单 `{ assertSubagentMaxDepth, settleRun }`（白名单变更需同步更新本节）；doctor 检查项 (d) 报版本偏差作预警。
+
+#### 6.4.5 npx 缓存漂移失效模式（README 必写，见 T18）
+
+「npx 重新解析/缓存清理 → live 根静默切换 → (i) cwd 补丁随旧根失效（子代理 cwd 静默回退父目录）；(ii) dsh-tools 链接悬空（所有工具调用报 reading 'prepare'）。**任一症状 → 重跑 `patches/install` 或先 `patches/verify` 体检**。」升级 dsh 后同样重跑（§6.5）。
 
 ### 6.5 统一安装 / 升级流程
 
@@ -428,16 +511,20 @@ dsh plugin --profile web add dsh-plugin-subagents     # 或 add <本地路径>
 # 2. 移除旧插件（D3；防 provider 重名 fail loud）
 #    - 编辑 ~/.dsh/profiles/web/cordis.patch.yml 删除 - id: legacy-bridges-plugin 行
 #    - cd ~/.dsh/profiles/web && pnpm remove legacy-bridges-plugin
-# 3. peer 单实例（必须；见 §8-R2）
-~/.dsh/profiles/web/fix-dsh-tools-dedupe.sh           # 或包内 scripts/link-harness-dsh-tools.sh
-# 4. cwd 能力（可选，需要 per-call cwd 才装）
-./patches/install.sh | patches\install.ps1
+# 3. 【必跑】dsh-tools 单实例修复 + cwd 补丁（两段式，见 §6.4.2）
+#    A 段（链接修复）= R2 硬失效缓解：强制执行、先于补丁、不受补丁失败阻塞
+#    B 段（cwd 补丁）= 可选能力；不需要 per-call cwd 时用 --links-only 只跑 A 段
+./patches/install.sh | patches\install.ps1          # 或 --links-only
+# 4. （可选）体检：live 根 / 两枚补丁 / 两处符号链接 / 版本偏差，任一漂移非零退出
+./patches/verify.sh | patches\verify.ps1
 # 5. web 会话 preset 适配（standard 类 preset 需要）
 ./scripts/install-preset.sh standard | scripts\install-preset.ps1 standard
 # 6. 重启 dsh --profile web，开新会话
 ```
 
-**dsh 升级后**：重跑 3（npx 缓存目录变了）与 4（node_modules 被重写冲掉补丁）；preset 副本在 DSH_HOME 下不受影响。bundle 层与 peerDependencies 版本契约同 legacy-cwd-plugin（`^0.1.0-rc.6` 一组 peer）。
+> 旧 `fix-dsh-tools-dedupe.sh` / `scripts/link-harness-dsh-tools.sh` 的职责已被第 3 步吸收（且修掉了其 `ls | tail -1` 选根启发式，§6.4.1）；`npm run setup:peer` 保留为开发期别名，内部委托同一逻辑。
+
+**dsh 升级 / npx 缓存漂移后**：重跑第 3 步（live 根变了 → 补丁与新根、符号链接一并重打/重指；npx 换 hash 时旧根补丁被静默弃用，见 §2.4-1/§6.4.5），或先第 4 步体检确认；preset 副本在 DSH_HOME 下不受影响。bundle 层与 peerDependencies 版本契约同 legacy-cwd-plugin（`^0.1.0-rc.6` 一组 peer）。
 
 ### 6.6 旧 registry 迁移与 legacy 别名
 
@@ -492,8 +579,8 @@ dsh-plugin-subagents/
 
 | # | 风险 | 依据 | 缓解 |
 |---|---|---|---|
-| R1 | **cwd 补丁与 rc.6 锚点耦合**：dsh 升级改写 bundle 形状 → 锚失配 | §2.1；README "Patches target rc.6 only" | 安装脚本锚失配即拒绝并提示；peerDependencies 版本契约挡住 API 漂移；stamp + 启动时能力检测给出"跑 patches/install"指引；发布流程包含新版本锚点验证任务 |
-| R2 | **dsh-tools 双实例 Symbol 陷阱**：`TOOL_RUNTIME_SCHEDULER` 模块级 Symbol，第二物理副本 → 所有工具调用死 `reading 'prepare'` | legacy-bridges-plugin `scripts/link-harness-dsh-tools.sh` 注释；profile `fix-dsh-tools-dedupe.sh`；本会话 profile node_modules 已 symlink | README 安装步骤强制第 3 步；`apply()` 启动时自检：`ctx.tools` 上以本实例 Symbol 取 scheduler 为 undefined → 打印致命指引（检测到即说明双实例已发生） |
+| R1 | **cwd 补丁双重失效面**：(i) rc.6 锚点耦合（dsh 升级改写 bundle → 锚失配）；(ii) **npx 缓存漂移**（`~/.npm/_npx/` 已有 10 个 hash 目录，重解析后 live 根静默切换，旧根补丁被弃用且无报错） | §2.1；§2.4-1 实测 | install B 段四态状态机（§6.4.2：which-dsh 动态解析根 → 逐枚判定 a/b/c/d；d 漂移 loud、c 原生支持降级 no-op）；verify 体检（§6.4.3 检查 b）非零退出 + 修复提示；启动时 cwd 能力检测（stamp 优先）给指引；README 失效模式必写（§6.4.5）；发布流程含新版本锚点验证任务 |
+| R2 | **dsh-tools 双实例 Symbol 陷阱**：`TOOL_RUNTIME_SCHEDULER` 模块级 Symbol，第二物理副本 → 所有工具调用死 `reading 'prepare'`；且漂移面有**两处**链接（profile + 插件仓库），npx 换 hash 后双双悬空；旧 dedupe 脚本 `ls \| tail -1` 选根不保证是运行根 | §2.4-2/4 实测；legacy-bridges-plugin `scripts/link-harness-dsh-tools.sh` 注释 | install **A 段强制先行**修复两处链接，先于补丁、不受补丁失败阻塞（§6.4.2 两段式；根来源 = which-dsh 解析，非启发式 §6.4.1；`--links-only` 供只要 dedupe 不要 cwd 的场景）；verify 检查 c；README 安装第 3 步标注必跑；`apply()` 启动自检：本实例 Symbol 取 scheduler 为 undefined → logger.fatal 指引 dedupe |
 | R3 | **bundle（patch 层）与 host-plane 双机制维护成本**：disable 依赖行 id 稳定性；web-app 层序假设 | §2.3-A/C | patch 只引用 `dsh-base` 行 id（`tool-subagent`/`tool-subagent-fork`，rc 内稳定）；CI 加 `dsh --dump-config` 冒烟（可选）；每次 dsh 升级跑回归清单（TASKS T19） |
 | R4 | **工具名接管冲突**：与 legacy-cwd-plugin/tools 双装 → 全局层 `subagent` duplicate error；与旧 legacy-bridges-plugin 双装 → provider 名 duplicate error | §4.3 | fail loud 本身是强制互斥（可接受）；README "二选一"表 + 安装命令里显式卸载步骤；错误信息可读化 |
 | R5 | **preset 布局耦合**：L1 删除行依赖 standard 的行 id/结构；L2 依赖官方行 config 与本插件 Config 超集兼容 | §2.3-D | 适配脚本锚定 `name: '@deepseek-ai/dsh-tool-subagent'` + `toolName` 字段而非行 id；Config 永远保持官方超集（回归测试断言 schema 兼容）；锚失配 loud |
@@ -504,7 +591,7 @@ dsh-plugin-subagents/
 
 ---
 
-## 9. 设计红线（继承 legacy-bridges-plugin AGENTS.md 7 条 + 新增 3 条）
+## 9. 设计红线（继承 legacy-bridges-plugin AGENTS.md 7 条 + 新增 5 条）
 
 1. relay 模型永远只读管道：子代理 toolFilter 只含 `subagent_submit`（+ 角色允许时的 `subagent`）。
 2. permissionMode 只作用于远端产品，映射产品自有 CLI flag。
@@ -516,6 +603,8 @@ dsh-plugin-subagents/
 8. （新增）**能力不匹配永远 loud error，绝不静默忽略参数**（§3.5）。
 9. （新增）**Config 保持官方 `dsh-tool-subagent` 超集**，preset 行可无缝改写指向本包（§6.3-L2 的前提）。
 10. （新增）**共享状态单实例持有**：binding/registry/并发槽只存在于全局 apply() 实例；`presetRow` 实例无状态。
+11. （新增）**安装/体检脚本禁止硬编码路径与选根启发式**：live 根一律 `which dsh → realpath → 上溯 node_modules` 动态解析（`DSH_HARNESS_ROOT` 显式覆盖除外）；打补丁前必做 anchor 校验，漂移大声失败；verify 模式任一漂移非零退出（§6.4）。
+12. （新增）**对 `@deepseek-ai/dsh-subagent` 的导入恒为纯函数白名单** `{ assertSubagentMaxDepth, settleRun }`，lint 强制；该包不纳入 symlink 去重（§6.4.4 定案，失效模式不对称性是其根据）。
 
 ---
 
@@ -523,4 +612,5 @@ dsh-plugin-subagents/
 
 - `node --test`：纯逻辑 + fake bridge + fake driver + fakeCtx；**禁止真实 CLI/密钥**；CI 三平台 × Node 18/20/22。
 - 关键新增覆盖：driver 能力矩阵（不支持参数 → throw）、backend/role 归并次序、天花板（native 调用者不受 bridge 天花板约束）、L1/L2 适配脚本对样例 preset 的幂等改写、registry 迁移、legacy 别名、config strict。
+- 安装/体检脚本：假目录树上验证 `resolve_live_root` 上溯算法（嵌套 node_modules 构造）、anchor 失配 loud、install→verify→uninstall→install 幂等往返、两处符号链接修复与 verify 漂移判定（正确根/错根/悬空三态）、`@deepseek-ai/dsh-subagent` 导入白名单 lint。
 - 文档：README.md / README.zh.md 同步更新（安装矩阵 §4.2、二选一表、升级重放清单）、CHANGELOG、AGENTS.md（红线继承）。
