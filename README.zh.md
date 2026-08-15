@@ -147,7 +147,7 @@ native 委派默认（作用于 delegate 工具；fork 工具从 `fork` 块读�
 | `agentOptions` | object | — | 子代理默认选项 `{ provider?, model?, maxTokens? }` |
 | `persona` | string | — | 默认 persona 文本或 `@preset:<id>` |
 | `toolFilter` | object | — | 默认 `{ allow?: string[], deny?: string[] }` |
-| `maxDepth` | 正整数 \| `'provider-managed'` | — | 委派深度上限 |
+| `maxDepth` | 正整数 \| `'provider-managed'` | `3`（driver 侧） | 委派深度上限；数值时逐请求下发，`'provider-managed'` 时不下发（由 provider 自治），省略时驱动侧默认为 3（对齐官方 `.default(3)`） |
 | `presetHints` | string[] | — | 展开进 `persona` 参数 description 的 preset 清单 |
 | `fork` | object | — | fork 工具覆盖：`provider`（默认 `'fork'`）、`backgroundMode`、`enableRunInBackground`、`agentOptions`、`persona`、`toolFilter`、`maxDepth` |
 

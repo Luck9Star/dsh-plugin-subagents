@@ -49,7 +49,7 @@
   1. `- id: tool-subagent / tool-subagent-fork` `disabled: true`（禁用官方行，headless 必需，见 §2.3-C）；
   2. `- insert:` 两个自身行（`provider: spawn|fork`、`toolName: subagent|subagent_fork`、`backgroundMode`、`presetHints`）。
 - **工具实现**（`lib/index.js`）：
-  - Config 与官方 `@deepseek-ai/dsh-tool-subagent` 完全同形（官方 `lib/index.js` L22–L37：`provider/toolName/enableRunInBackground/backgroundMode/agentOptions/persona/toolFilter/maxDepth`），**超集仅增加 `presetHints`** —— 这是 preset 行可直接把 `name` 从官方包改写为本包（配置兼容替换）的原因。
+  - Config 与官方 `@deepseek-ai/dsh-tool-subagent` 完全同形（官方 `lib/index.js` L22–L37：`provider/toolName/enableRunInBackground/backgroundMode/agentOptions/persona/toolFilter/maxDepth`。差异：maxDepth 官方为 schema 级 `.default(3)`，本插件为驱动级 `?? 3` 默认（lib/drivers/native.js），语义等效——省略时同样得到 3 且逐请求下发；见 02d31e4 F1 修复与评审记录），**超集仅增加 `presetHints`** —— 这是 preset 行可直接把 `name` 从官方包改写为本包（配置兼容替换）的原因。
   - per-call 覆盖：`persona`（`@preset:<id|显示名>` 从 `<dshHome>/.agent-presets/<id>/agent.cordis.yml` 读 `id: persona` 行的 `config.text`）、`model`（`resolveModelRoute` 拆 `provider/model`）、`toolFilter`、`provider`、`cwd`（`assertCwd`：绝对路径 + 可访问目录）。
   - 路由：`resolveDelegationRun` → 前台 `ctx.subagents.start` + `settleForegroundRun`；一次性后台经 `ctx.get('jobs')` 包 `SubagentRun`；可续续走 `ctx.subagents.startContinuable` 返回 `childId`。
   - 挂载模式：监听 `subagent/provider-added|removed` 事件惰性 mount/unmount 工具（Cordis 并行加载下注册顺序不可假设 —— 官方 dsh-subagent README L95 同样强调）。

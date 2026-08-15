@@ -222,7 +222,7 @@ fields from the `fork` block):
 | `agentOptions` | object | — | default child options `{ provider?, model?, maxTokens? }` |
 | `persona` | string | — | default persona text or `@preset:<id>` |
 | `toolFilter` | object | — | default `{ allow?: string[], deny?: string[] }` |
-| `maxDepth` | positive integer \| `'provider-managed'` | — | delegation depth cap |
+| `maxDepth` | positive integer \| `'provider-managed'` | `3` (driver-side) | delegation depth cap; when numeric it is forwarded per-request, `'provider-managed'` is not forwarded (provider governs), and when omitted the driver falls back to `3` (aligns with the official `.default(3)`) |
 | `presetHints` | string[] | — | preset ids listed in the `persona` parameter description |
 | `fork` | object | — | fork-tool overrides: `provider` (default `'fork'`), `backgroundMode`, `enableRunInBackground`, `agentOptions`, `persona`, `toolFilter`, `maxDepth` |
 
