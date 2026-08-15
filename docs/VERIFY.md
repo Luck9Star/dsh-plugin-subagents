@@ -48,6 +48,6 @@
 - npx 缓存漂移：任何 `reading 'prepare'`（工具全挂）或「cwd 静默失效」症状 → 重跑 `patches/install.sh` 或先 `patches/verify.sh`（README「Upgrading dsh / npx cache drift」节）。
 - dsh 升级后：node_modules 重写 → 重跑 install.sh（幂等）+ verify.sh；preset 副本在 DSH_HOME 下不受影响。
 - npm 发布前：package.json 的 repository/homepage/bugs 为占位 URL，需改为真实仓库地址。已设 CI 硬门禁：publish.yml 在发布前检测占位地址并失败。
-- **设置 UI 写入路径怪癖**：新建会话选择器点击「…+subagents」曾出现无错误回弹（settings.update 未达磁盘；该路径为 dsh 通用设置设施，非本插件代码）；workaround：直接编辑 `~/.dsh/settings.yaml` 的 `agent-presets.default`（文件有 watcher，运行进程即时同步，实测有效）；若复现可向 dsh 上游反馈。
+- **设置 UI 选择器一次静默回弹（根因未定）**：症状——新建会话选择器点击「…+subagents」后标签跳回原项，用户未见错误文本。已核实证据：①settings 文件每写即原子落盘，而故障期间文件 mtime 停留在启动时刻（写入未持久化）；②副本 roster 扫描 broken=null、行形状合法（非插件问题）；③该路径为 dsh 通用设置设施（api.settings.update），不经过本插件代码。候选因（未验证）：写入失败但描述行错误文本未被执行者注意 / select 成功但 roster isDefault 回显未翻转。workaround（实测有效）：直接编辑 `~/.dsh/settings.yaml` 的 `agent-presets.default`（文件 watcher 即时同步运行进程）。复现指引：若再次出现，记录选择器描述行的完整文本与宿主日志后再向上游反馈；不要以本条目为据断言根因。
 
 状态：2026-08-15 真机验收通过（A1–A17；B 节核心项已确认）
