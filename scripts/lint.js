@@ -24,13 +24,19 @@ const PACKAGE = '@deepseek-ai/dsh-subagent'
 // single- and double-quoted specifiers both work.
 const IMPORT_RE = /import\s*\{([^}]*)\}\s*from\s*['"]@deepseek-ai\/dsh-subagent['"]/g
 
+// Namespace import form — `import * as ns from "@…/dsh-subagent"`. Red line 12's
+// whitelist is a set of NAMED pure functions; a namespace import smuggles the
+// whole module (module state + Symbol identity) past the brace regeg, so this
+// shape is an unconditional violation (never in whitelist semantics). Non-brace
+// namespace imports from OTHER modules stay legal (the regex is anchored to the
+// package).
+const NAMESPACE_RE = /import\s*\*\s*as\s+(\w+)\s*from\s*['"]@deepseek-ai\/dsh-subagent['"]/g
+
 // Iterate every explicit `from '@deepseek-ai/dsh-subagent'` named import in a
 // single source string and return each offending symbol as a line/col entry.
 // Handles both single-line (`import { a } from …`) and multi-line
 // (`import {\n  a,\n  b,\n} from …`) forms; `import * as ns` without braces is
-// not matched (rejected elsewhere by syntax review / review, but flagged here
-// by the absence of a name-space form in the regex is intentional — the regex
-// only covers the whitelisted named-import shape).
+// not matched here and is flagged separately by NAMESPACE_RE below.
 export function checkWhitelist(sources) {
   const violations = []
   for (const file of Object.keys(sources)) {
@@ -52,6 +58,13 @@ export function checkWhitelist(sources) {
           violations.push({ file, line, symbol })
         }
       }
+    }
+    // Namespace imports of the package are always violations.
+    NAMESPACE_RE.lastIndex = 0
+    while ((m = NAMESPACE_RE.exec(src)) !== null) {
+      const before = src.slice(0, m.index)
+      const line = (before.match(/\n/g) || []).length + 1
+      violations.push({ file, line, symbol: m[1] })
     }
   }
   return violations

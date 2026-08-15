@@ -18,6 +18,8 @@
 | A9 | 两份 patch YAML 语法预检 | ✅ | profile 层 3 行、插件 bundle 层 3 行均可解析（防重启时 loader 报错） |
 | A10 | L2 preset 适配（orchestrator） | ✅ | 8 行角色行 → `presetRow: true` 增强；副本 `orchestrator-subagents`；源 preset 只读未动；marker 写入 |
 | A11 | 测试套件 | ✅ | 316/316 全绿（pipefail 门禁 + 独立计数核验） |
+| A13 | 真实 grok ACP 桥接冒烟（bridge 层直连） | ✅ | `grok agent --always-approve stdio`；create→submit→stopReason completed→精确回显 BRIDGE_SMOKE_OK→dispose；SMOKE_EXIT=0 |
+| A14 | 真实 codex CLI 桥接冒烟（bridge 层直连） | ✅ | codex JSONL bridge；create→submit→completed→精确回显 CODEX_SMOKE_OK→dispose；SMOKE_EXIT=0 |
 | A12 | 回滚材料 | ✅ | profile package.json / cordis.patch.yml 备份于 /tmp/profile-*.backup.*；补丁 .bak_cwd ×2；uninstall.sh 可还原 |
 
 ## B. 需用户执行（重启后生效）
@@ -35,6 +37,10 @@
    - [ ] `plan_agent` 等 presetRow 增强行可用且带 per-call 覆盖参数
 
 ## C. 已知边界
+
+> 补充说明：A13/A14 两条冒烟是 bridge 层**直连**真实 agent 的协议级端到端
+> （create→submit→completed→精确回显→dispose）；经 dsh 工具面的完整委派链路
+> （`subagent` 调用 → 驱动 → 桥）验证属 B 节重启后清单。
 
 - npx 缓存漂移：任何 `reading 'prepare'`（工具全挂）或「cwd 静默失效」症状 → 重跑 `patches/install.sh` 或先 `patches/verify.sh`（README「Upgrading dsh / npx cache drift」节）。
 - dsh 升级后：node_modules 重写 → 重跑 install.sh（幂等）+ verify.sh；preset 副本在 DSH_HOME 下不受影响。

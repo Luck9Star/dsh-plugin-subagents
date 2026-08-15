@@ -26,6 +26,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { registerSubagentTool } from '../lib/tools/subagent.js'
+import { createNativeDriver } from '../lib/drivers/native.js'
 import { NATIVE_CAPS, BRIDGE_CAPS } from '../lib/drivers/types.js'
 
 // ---- fixtures ----
@@ -629,6 +630,31 @@ test('⑧ override precedence args > role.overrides > config (three-way distinct
   assert.deepEqual(n.toolFilter, { deny: ['config-tool'] })
   assert.deepEqual(n.agentOptions, { provider: 'config-llm', model: 'config-model' })
   assert.equal(n.maxDepth, 5)
+})
+
+test('⑨ no maxDepth config anywhere → the native driver receives the default 3 (F1)', async () => {
+  // Wire the REAL createNativeDriver (not the fake) so the tool→driver chain
+  // applies its config-side default: the tool forwards no maxDepth (config and
+  // role omit it), and the driver defaults to 3. The default route is
+  // 'continuable', whose inner request reaches ctx.subagents.startContinuable.
+  const continuables = []
+  const spawnCtx = {
+    subagents: {
+      getProvider: (n) => (n === 'spawn' ? { name: 'spawn', capabilities: {} } : undefined),
+      startContinuable: async (spec) => {
+        continuables.push(spec)
+        return { childId: 'c-1', messageId: 'msg-1' }
+      },
+    },
+    get: (name) => (name === 'jobs' ? undefined : undefined),
+  }
+  const native = createNativeDriver({ kind: 'spawn', ctx: spawnCtx, config: { provider: 'spawn' } })
+  const { assembled } = fakeAssembled({ native, bridge: fakeBridgeDriver() })
+  const ctx = fakeCtx()
+  registerSubagentTool(ctx, { assembled, roles: fakeRoles({ general: GENERAL }), config: {} })
+  await ctx.tool('subagent').execute({ description: 'no depth cfg', prompt: 'Work.' }, execFor())
+  assert.equal(continuables.length, 1, 'real native driver used')
+  assert.equal(continuables[0].request.maxDepth, 3)
 })
 
 // ---- 附加：工具注册面 / 可用性 / 后台开关 / systemPrompt / render ----

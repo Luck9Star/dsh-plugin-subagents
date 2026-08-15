@@ -99,6 +99,24 @@ test('full branch: maxDepth and backgroundMode value domains', () => {
   assert.throws(() => validateConfig({ backgroundMode: 'weird' }), /backgroundMode/)
 })
 
+test('full branch: an empty toolFilter (allow/deny both blank) is rejected loudly', () => {
+  // CW apply()-time guard: a configured toolFilter that names neither allow nor
+  // deny would silently deny every tool (`{ allow: [] }`) — so it must throw.
+  assert.throws(() => validateConfig({ toolFilter: { allow: [] } }),
+    /dsh-plugin-subagents: invalid config.*neither allow nor deny/)
+  assert.throws(() => validateConfig({ toolFilter: { deny: [] } }), /neither allow nor deny/)
+  assert.throws(() => validateConfig({ toolFilter: {} }), /neither allow nor deny/)
+  // fork.* is subject to the same guard
+  assert.throws(() => validateConfig({ fork: { provider: 'fork', toolFilter: { allow: [] } } }), /neither allow nor deny/)
+  // presetRow branch too
+  assert.throws(
+    () => validateConfig({ presetRow: true, provider: 'spawn', toolFilter: { deny: [] } }),
+    /neither allow nor deny/,
+  )
+  // a toolFilter that actually names something stays legal
+  assert.deepEqual(validateConfig({ toolFilter: { allow: ['read'], deny: [] } }).toolFilter, { allow: ['read'], deny: [] })
+})
+
 test('full branch: legacyProductAliases accepts auto/true/false, rejects other strings', () => {
   assert.equal(validateConfig({ legacyProductAliases: 'auto' }).legacyProductAliases, 'auto')
   assert.equal(validateConfig({ legacyProductAliases: true }).legacyProductAliases, true)

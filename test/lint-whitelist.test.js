@@ -64,14 +64,28 @@ test('violation: multiple offending symbols each yield an entry', () => {
   assert.deepEqual(r.map((v) => v.symbol), ['evil', 'worse'])
 })
 
-test('clean: imports of other / non-brace (namespace) modules are ignored', () => {
+test('clean: namespace imports of OTHER modules (not the package) are ignored', () => {
   const src = {
     'lib/x.js':
       "import { anything } from 'yaml'\n" +
-      "import * as all from '@deepseek-ai/dsh-subagent'\n" +
+      "import * as all from 'some-other-mod'\n" +
       `import { settleRun } from ${P}\n`,
   }
   assert.deepEqual(checkWhitelist(src), [])
+})
+
+test('violation: a namespace import of the package is always reported (red line 12)', () => {
+  // A namespace import smuggles the whole module past the named pure-function
+  // whitelist — module state + Symbol identity — so it is an unconditional
+  // violation, reported on the import's line with the alias as the symbol.
+  // (The fixture is built via ${P} so the raw source never embeds the verbatim
+  // forbidden statement, keeping the end-to-end lint scan of this file clean.)
+  const src = { 'lib/x.js': `import * as ns from ${P}\nconst a = 1\n` }
+  const r = checkWhitelist(src)
+  assert.equal(r.length, 1)
+  assert.equal(r[0].file, 'lib/x.js')
+  assert.equal(r[0].line, 1)
+  assert.equal(r[0].symbol, 'ns')
 })
 
 test('end-to-end: `node scripts/lint.js` exits 0 on the compliant repo', () => {

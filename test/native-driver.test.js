@@ -287,14 +287,36 @@ test('omitted per-call fields stay omitted (no empty agentOptions/persona/toolFi
   assert.equal('agentOptions' in request, false)
   assert.equal('persona' in request, false)
   assert.equal('toolFilter' in request, false)
-  assert.equal('maxDepth' in request, false)
   assert.equal('cwd' in request, false)
+  // maxDepth differs: with no per-call value and no config default, the
+  // config-side default of 3 is forwarded (F1 — official default restored).
+  assert.equal(request.maxDepth, 3)
 })
 
 test('maxDepth "provider-managed" is not forwarded as a request field', async () => {
   const { ctx, calls } = fakeCtx()
   const driver = createNativeDriver({ kind: 'spawn', ctx, config: { provider: 'spawn' } })
   await driver.start(baseRequest({ native: { maxDepth: 'provider-managed' } }))
+  assert.equal('maxDepth' in calls.start[0].request, false)
+})
+
+test('maxDepth defaults to 3 when omitted (config-side, F1) so the pseudo start receives request.maxDepth === 3', async () => {
+  const { ctx, calls } = fakeCtx()
+  // No per-call maxDepth and no config.maxDepth → the official default 3 is forwarded.
+  const driverNoCfg = createNativeDriver({ kind: 'spawn', ctx, config: { provider: 'spawn' } })
+  await driverNoCfg.start(baseRequest())
+  assert.equal(calls.start[0].request.maxDepth, 3)
+  // A numeric config.maxDepth is used as the fallback when per-call omits it.
+  const { ctx: ctx2, calls: calls2 } = fakeCtx()
+  const driverCfg = createNativeDriver({ kind: 'spawn', ctx: ctx2, config: { provider: 'spawn', maxDepth: 7 } })
+  await driverCfg.start(baseRequest())
+  assert.equal(calls2.start[0].request.maxDepth, 7)
+})
+
+test('config maxDepth "provider-managed" is not forwarded either (config-side pass-through)', async () => {
+  const { ctx, calls } = fakeCtx()
+  const driver = createNativeDriver({ kind: 'spawn', ctx, config: { provider: 'spawn', maxDepth: 'provider-managed' } })
+  await driver.start(baseRequest())
   assert.equal('maxDepth' in calls.start[0].request, false)
 })
 
