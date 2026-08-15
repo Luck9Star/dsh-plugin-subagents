@@ -1,0 +1,49 @@
+{
+  "name": "dsh-plugin-subagents",
+  "version": "0.1.0",
+  "description": "Unified subagent provider plugin for the DeepSeek Harness (T01 scaffold placeholder).",
+  "type": "module",
+  "main": "lib/index.js",
+  "files": [
+    "lib/",
+    "cordis.patch.yml",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test",
+    "lint": "node scripts/lint.js",
+    "setup:peer": "bash scripts/link-harness-dsh-tools.sh"
+  },
+  "keywords": [
+    "deepseek-harness",
+    "cordis",
+    "subagent",
+    "acp",
+    "claude-code",
+    "codex"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@agentclientprotocol/sdk": "^0.25.0",
+    "zod": "^3.23.0",
+    "yaml": "^2.0.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/dsh-tools": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-subagent": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-agent": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-llm": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-session": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-jobs": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-home-paths": "^0.1.0-rc.6"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "license": "MIT"
+}

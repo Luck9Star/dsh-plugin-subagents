@@ -1,0 +1,4 @@
+node_modules/
+*.log
+patches/.applied
+.DS_Store

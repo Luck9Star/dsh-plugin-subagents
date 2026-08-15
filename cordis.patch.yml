@@ -1,0 +1,7 @@
+# dsh-plugin-subagents bundle patch (T01 placeholder).
+#
+# Real patch rows land in task T15. This stub is intentionally an empty list
+# so `dsh.bundle.patch` on this package resolves and validates but changes
+# nothing.
+
+[]
