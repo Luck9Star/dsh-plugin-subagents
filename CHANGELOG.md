@@ -172,6 +172,14 @@ takes over the official `subagent` / `subagent_fork` tool names.
   gate asserts every `dsh-plugin-subagents` row in an L1/L2 product passes
   `validateConfig` with `disabled` cleared. Zero rewritable rows still fails
   loud (standard-shaped presets are L1 land).
+- Fixed preset adaptation L1 leaving an official `dsh-tool-subagent` row that
+  omits `toolName` untouched. `isGenericDelegationRow` did not apply the
+  official default (`subagent`) when judging deletion targets, so such a row
+  survived L1 adaptation and shadowed the plugin's global full-parameter
+  `subagent` at the preset layer (the same failure class as the L2 mount
+  incident, one layer down). Both L1/L2 judgments now share one default-value
+  rule. Regression case included (a missing-`toolName` official row is
+  deleted; role rows with distinct toolNames are untouched).
 - Fixed `subagent_progress` / `subagent_wait` failing every call with
   `returned invalid output: value is not lossless JSON` (2026-08-15 smoke
   E3). dsh-tools snapshots every tool return through dsh-session's
