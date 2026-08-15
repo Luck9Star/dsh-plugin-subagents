@@ -1,7 +1,47 @@
-# dsh-plugin-subagents bundle patch (T01 placeholder).
+# dsh-plugin-subagents bundle patch (T15).
 #
-# Real patch rows land in task T15. This stub is intentionally an empty list
-# so `dsh.bundle.patch` on this package resolves and validates but changes
-# nothing.
+# 用途：接管官方 `subagent` / `subagent_fork` 工具。在 headless 形态下禁用
+#   dsh-base 注册的官方 `tool-subagent` / `tool-subagent-fork` 行，替换为本
+#   插件的统一 `subagents` 工具实例（见 docs/DESIGN.md §4.1、§2.3-B3）；
+#   在 web 形态下 web-app 层已禁用官方行，此处的 disable 是幂等的同名重复。
+#   工具名不变（subagent / subagent_fork），模型习惯零迁移。
+#
+# 安装方式：`dsh plugin --profile <profile> add <本包>`（reconcile 自动把本
+#   patch 层追加到 bundles 尾部，排在 dsh-base 之后，disable/insert 生效）；
+#   之后视需要运行 patches/install（cwd 补丁 + dsh-tools 单实例链接修复）与
+#   scripts/install-preset（standard 类 preset 需适配，见 DESIGN §6.4/§6.3）。
+#   Web 用户注意：预设（preset）层会遮蔽全局层同名工具，standard 类 preset
+#   必须先跑 scripts/install-preset（当界面是 web@standard 时官方版顶名）。
+#   安装/使用详见 README。
+#
+# 互斥：本插件接管官方委派工具名，与同族 bundle 插件互斥，只能二选一 ——
+#   安装前必须卸载 / 停用 legacy-cwd-plugin、dsh-subagent-tools，并从 profile
+#   的 cordis.patch.yml 移除旧的 legacy-bridges-plugin insert 行；
+#   否则多个 bundle 同时向全局层注册 `subagent` 会 duplicate error fail loud
+#   （bridge provider 名 codex/claude-code/acp 重复注册也会 fail loud）。
+#   互斥表格见 README「二选一」。
 
-[]
+# ── 接管官方委派工具（headless 必需；web 下幂等重复）──────────────────
+- id: tool-subagent
+  disabled: true
+
+- id: tool-subagent-fork
+  disabled: true
+
+# ── 注册统一工具面：单一插件实例持有全部共享状态（bindings/registry/drivers）──
+- insert:
+    # 本行即 host-plane Cordis 插件实例；所有 subagent_* 家族工具由它注册。
+    - id: subagents
+      name: dsh-plugin-subagents
+      config:
+        # —— 仅列出显式默认（其余键省略，走 lib/config.js zod strict 默认）——
+        # bridge 并发治理（与旧 legacy-bridges-plugin profile 行同构，迁移即拷贝）。
+        idleTimeoutMs: 600000          # 子代理 idle 多久后释放远端资源（毫秒）；bridge 生命周期用
+        maxConcurrentChildren: 8       # bridge 并发槽上限；native 后台走 harness jobs,不自治理
+        # backgroundMode 不在此设置：省略即走工具默认 —— 按 DESIGN §6.1 /
+        # lib/config.js，delegate 工具默认 continuable（可续续后台）、fork 工具
+        # 默认 one-shot，对齐官方 dsh-base 行。
+        # 外部 ACP agent 经 providers 零代码接入（type 须为 claude|codex|acp，
+        # 其余字段见 lib/config.js §6.1 providerDefSchema）；示例（注释）：
+        #   providers:
+        #     grok: { type: acp, command: grok, args: [agent, --always-approve, stdio] }

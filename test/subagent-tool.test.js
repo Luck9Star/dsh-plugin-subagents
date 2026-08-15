@@ -90,17 +90,18 @@ function fakeBridgeDriver({ outcome, registered = true, reason = 'codex CLI not 
 }
 
 /** 假 assembled：assembleDrivers 产物中工具层消费的最小子集。 */
-function fakeAssembled({ native, bridge } = {}) {
+function fakeAssembled({ native, bridge, liveChildren } = {}) {
   const bindings = new Map()
   const registry = new Map()
   return {
     assembled: {
       native: { spawn: native },
       bridges: new Map(bridge ? [['codex', bridge]] : []),
-      state: { bindings, registry },
+      state: { bindings, registry, liveChildren },
     },
     bindings,
     registry,
+    liveChildren: liveChildren ?? new Set(),
   }
 }
 
@@ -156,7 +157,7 @@ test('① default (no backend/role) delegates to the native spawn driver with me
   assert.equal(native.calls.length, 1, 'native spawn driver is used')
   assert.equal(bridge.calls.length, 0, 'bridge driver untouched')
   const request = native.calls[0]
-  assert.equal(request.route, 'sync', 'backgroundMode not continuable → default run is foreground')
+  assert.equal(request.route, 'continuable', 'delegate default backgroundMode is continuable (DESIGN §6.1)')
   assert.equal(request.label, 'scout the repo')
   assert.equal(request.task, 'Read the repo and report.')
   assert.equal(request.parent, exec.agent)
@@ -172,26 +173,27 @@ test('① default (no backend/role) delegates to the native spawn driver with me
   })
 })
 
-test('① native route default follows backgroundMode (continuable default; one-shot explicit true → job)', async () => {
-  // backgroundMode=continuable：省略 run_in_background → 默认 true → continuable
+test('① native route default follows backgroundMode (omitted → continuable default; one-shot explicit true → job)', async () => {
+  // backgroundMode 缺省 → 工具级默认 continuable（DESIGN §6.1）：省略
+  // run_in_background → 默认 true → continuable
   const nativeContinuable = fakeNativeDriver({ outcome: { kind: 'continuable', childId: 'c-1', backend: 'native:spawn' } })
   const ctxA = fakeCtx()
   registerSubagentTool(ctxA, {
     assembled: fakeAssembled({ native: nativeContinuable }).assembled,
     roles: fakeRoles({ general: GENERAL }),
-    config: { backgroundMode: 'continuable' },
+    config: {},
   })
   const outA = await ctxA.tool('subagent').execute({ description: 'bg work', prompt: 'Do it.' }, execFor())
-  assert.equal(nativeContinuable.calls[0].route, 'continuable')
+  assert.equal(nativeContinuable.calls[0].route, 'continuable', 'omitted backgroundMode defaults to continuable → run_in_background true')
   assert.deepEqual(outA, { kind: 'continuable', child_id: 'c-1', backend: 'native:spawn', role: 'general' })
 
-  // backgroundMode 缺省（one-shot 语义）+ 显式 true → job（一次性后台作业）
+  // 显式 one-shot + run_in_background true → job（一次性后台作业）
   const nativeJob = fakeNativeDriver({ outcome: { kind: 'job', jobId: 'job-7' } })
   const ctxB = fakeCtx()
   registerSubagentTool(ctxB, {
     assembled: fakeAssembled({ native: nativeJob }).assembled,
     roles: fakeRoles({ general: GENERAL }),
-    config: {},
+    config: { backgroundMode: 'one-shot' },
   })
   const outB = await ctxB.tool('subagent').execute(
     { description: 'bg job', prompt: 'Do it.', run_in_background: true },
@@ -413,6 +415,76 @@ test('⑤ ceiling requires assembled.state.registry — missing registry fails l
     /must expose both `bindings` and `registry`/,
   )
   assert.equal(bridge.calls.length, 0)
+})
+
+// ---- maxConcurrentChildren 并发槽（§5.5：仅 bridge continuable 占槽） ----
+
+test('maxConcurrentChildren cap: bridge continuable over the cap throws with the cap value and settle hints', async () => {
+  // cap 满：liveChildren 塞满默认上限（8）→ bridge continuable loud 拒绝
+  const liveChildren = new Set(['c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7', 'c8'])
+  const bridge = fakeBridgeDriver()
+  const { assembled } = fakeAssembled({ native: fakeNativeDriver(), bridge, liveChildren })
+  const ctx = fakeCtx()
+  registerSubagentTool(ctx, { assembled, roles: fakeRoles({ general: GENERAL }), config: {} })
+
+  // 省略 run_in_background → 默认 continuable；cap 满 → throw（消息含当前上限
+  // 值与 settle/调大提示，对齐 PS 风格）
+  await assert.rejects(
+    () => ctx.tool('subagent').execute(
+      { description: 'x', prompt: 'y', backend: 'codex' },
+      execFor(),
+    ),
+    (err) => err.message.includes('concurrency limit reached')
+      && err.message.includes('8 bridge children')
+      && err.message.includes('subagent_progress')
+      && err.message.includes('subagent_wait')
+      && err.message.includes('maxConcurrentChildren'),
+  )
+  assert.equal(bridge.calls.length, 0, 'over-cap call never reaches the driver')
+
+  // 显式 config.maxConcurrentChildren 更小 → 用配置值判断（2 个 live 子代理即达上限）
+  const liveChildren2 = new Set(['c1', 'c2'])
+  const bridgeB = fakeBridgeDriver()
+  const { assembled: assembledB } = fakeAssembled({ native: fakeNativeDriver(), bridge: bridgeB, liveChildren: liveChildren2 })
+  const ctxB = fakeCtx()
+  registerSubagentTool(ctxB, { assembled: assembledB, roles: fakeRoles({ general: GENERAL }), config: { maxConcurrentChildren: 2 } })
+  await assert.rejects(
+    () => ctxB.tool('subagent').execute(
+      { description: 'x', prompt: 'y', backend: 'codex' },
+      execFor(),
+    ),
+    (err) => err.message.includes('2 bridge children'),
+  )
+  assert.equal(bridgeB.calls.length, 0)
+})
+
+test('maxConcurrentChildren cap: bridge continuable under the cap starts normally; sync never consumes a slot', async () => {
+  // cap 未满（1 个 live 子代理 < 8）→ bridge continuable 正常 start
+  const liveChildren = new Set(['c1'])
+  const bridge = fakeBridgeDriver()
+  const { assembled } = fakeAssembled({ native: fakeNativeDriver(), bridge, liveChildren })
+  const ctx = fakeCtx()
+  registerSubagentTool(ctx, { assembled, roles: fakeRoles({ general: GENERAL }), config: {} })
+
+  await ctx.tool('subagent').execute(
+    { description: 'under cap', prompt: 'Work.', backend: 'codex' },
+    execFor(),
+  )
+  assert.equal(bridge.calls.length, 1)
+  assert.equal(bridge.calls[0].route, 'continuable', 'under-cap bridge continuable starts')
+
+  // sync 路由即便 cap 满也不占槽（one-shot 由调用方 turn 约束，不检查）
+  const full = new Set(['c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7', 'c8'])
+  const bridgeSync = fakeBridgeDriver()
+  const { assembled: assembledSync } = fakeAssembled({ native: fakeNativeDriver(), bridge: bridgeSync, liveChildren: full })
+  const ctxSync = fakeCtx()
+  registerSubagentTool(ctxSync, { assembled: assembledSync, roles: fakeRoles({ general: GENERAL }), config: {} })
+  await ctxSync.tool('subagent').execute(
+    { description: 'sync', prompt: 'Quick check.', backend: 'codex', run_in_background: false },
+    execFor(),
+  )
+  assert.equal(bridgeSync.calls[0].route, 'sync', 'sync route is not capped')
+  assert.equal(bridgeSync.calls.length, 1)
 })
 
 // ---- ⑥ 参数-能力矩阵 ----
@@ -637,7 +709,7 @@ test('systemPrompt section registers only for continuable deployments and mentio
   registerSubagentTool(ctxOneShot, {
     assembled: fakeAssembled({ native: fakeNativeDriver() }).assembled,
     roles,
-    config: {},
+    config: { backgroundMode: 'one-shot' },
   })
   assert.equal(ctxOneShot.sections.length, 0, 'one-shot deployments get no background-usage section')
 })
