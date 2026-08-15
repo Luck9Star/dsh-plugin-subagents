@@ -238,7 +238,7 @@ npm test               # node:test —— 纯逻辑 + fake bridge/driver/ctx
 npm run lint           # node --check 全模块 + dsh-subagent 导入白名单检查
 ```
 
-测试套件绝不依赖真实 CLI、密钥或网络 —— 只用 fake 即可全绿。架构见 [docs/DESIGN.md](docs/DESIGN.md)，任务分解见 [docs/TASKS.md](docs/TASKS.md)。
+测试套件绝不依赖真实 CLI、密钥或网络 —— 只用 fake 即可全绿。CI 在 macOS/Ubuntu/Windows × Node 18/20/22 上跑完整套件（`npm ci` → `npm run lint` → `npm test`），发布构建使用 trusted-publishing（`--provenance`）。架构见 [docs/DESIGN.md](docs/DESIGN.md)，任务分解见 [docs/TASKS.md](docs/TASKS.md)。
 
 ## 安全
 

@@ -367,8 +367,11 @@ npm run lint           # node --check every module + the dsh-subagent import whi
 ```
 
 The suite must never require a real CLI, a key, or a network — it runs green
-on a bare runner with fakes only. See [docs/DESIGN.md](docs/DESIGN.md) for the
-architecture and [docs/TASKS.md](docs/TASKS.md) for the task breakdown.
+on a bare runner with fakes only. CI runs the suite on
+macOS/Ubuntu/Windows × Node 18/20/22 (`npm ci` → `npm run lint` → `npm test`),
+with trusted-publishing (`--provenance`) configured for release builds. See
+[docs/DESIGN.md](docs/DESIGN.md) for the architecture and
+[docs/TASKS.md](docs/TASKS.md) for the task breakdown.
 
 ## Security
 

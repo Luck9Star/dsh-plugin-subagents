@@ -117,13 +117,36 @@ takes over the official `subagent` / `subagent_fork` tool names.
   module instance (scheduler Symbol missing) and fails with the dedupe fix
   guidance instead of letting every tool call die later.
 
+**Build & CI**
+
+- GitHub Actions CI matrix (`.github/workflows/ci.yml`): macOS / Ubuntu /
+  Windows × Node 18 / 20 / 22 running `npm ci` → `npm run lint` →
+  `npm test`; the suite and lint need no real CLI, key, or network, so the
+  bare runners stay green. The Windows leg exercises the `.cmd`-shim
+  launching paths.
+- Trusted-publishing npm release workflow (`.github/workflows/publish.yml`):
+  OIDC `id-token: write` + `--provenance --access public`, no static
+  `NODE_AUTH_TOKEN`.
+- `npm run lint` now also enforces the `@deepseek-ai/dsh-subagent`
+  pure-function import whitelist (red line 12, `{ assertSubagentMaxDepth,
+  settleRun }`) across `lib/`, `test/`, `scripts/`; a violation is reported
+  as `file:line: illegal import …`.
+- Publish metadata in `package.json`: a `files` whitelist (`lib/`, `roles/`,
+  `patches/`, `scripts/`, `cordis.patch.yml`, `README*`, `CHANGELOG`,
+  `LICENSE`, …), `repository` / `bugs` / `homepage` (placeholder URLs — must
+  be replaced with the real repo before publishing) and `keywords`.
+- Placeholder-repo caveat: `npm publish` must be gated on a real OIDC-trusted
+  publisher owner and updated `repository`/`homepage`/`bugs` URLs (see
+  `publish.yml` and `docs/VERIFY.md`).
+
 **Docs & tests**
 
 - Bilingual README (effect matrix, mutual-exclusion table, six-step install,
   npx-cache drift playbook), CHANGELOG, AGENTS.md (design red lines),
-  SECURITY.md.
-- 304 `node:test` cases — pure logic plus fake bridge / driver / ctx; the
-  suite never requires a real CLI, a key, or a network.
+  SECURITY.md, and an acceptance record in `docs/VERIFY.md`.
+- 316 `node:test` cases — pure logic plus fake bridge / driver / ctx; the
+  suite never requires a real CLI, a key, or a network (lint whitelist and
+  npm-pack content checks included).
 - `npm run lint`: `node --check` every module plus the
   `@deepseek-ai/dsh-subagent` pure-function import whitelist
   (`assertSubagentMaxDepth`, `settleRun`).
