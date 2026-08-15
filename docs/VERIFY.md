@@ -21,11 +21,14 @@
 | A13 | 真实 grok ACP 桥接冒烟（bridge 层直连） | ✅ | `grok agent --always-approve stdio`；create→submit→stopReason completed→精确回显 BRIDGE_SMOKE_OK→dispose；SMOKE_EXIT=0 |
 | A14 | 真实 codex CLI 桥接冒烟（bridge 层直连） | ✅ | codex JSONL bridge；create→submit→completed→精确回显 CODEX_SMOKE_OK→dispose；SMOKE_EXIT=0 |
 | A12 | 回滚材料 | ✅ | profile package.json / cordis.patch.yml 备份于 /tmp/profile-*.backup.*；补丁 .bak_cwd ×2；uninstall.sh 可还原 |
+| A15 | 真实 GUI 引导（用户重启） | ✅ | 插件条目干净加载；实测暴露并修复两处 Cordis 契约缺陷：inject 缺 systemPrompt（72d7d40）与 apply 返回非空对象被判 Invalid effect（3360252），各带回归防线；修复后限时引导探测「loader entry subagents」零失败（仅余 GUI 并存的预期 EADDRINUSE） |
+| A16 | preset L2 副本真实组合 | ✅ | orchestrator-subagents 经 roster 扫描 broken=null、行形状合法；默认切换后新会话成功组合，工具面出现 backend/role 参数（presetRow 分支实战验证） |
+| A17 | 8 行角色化 presetRow 行 | ✅ | plan_agent 等行以 dsh-plugin-subagents + presetRow:true 加载，配置键全部落在 presetRow schema 内 |
 
 ## B. 需用户执行（重启后生效）
 
 1. **重启 dsh**（GUI 进程重启；本会话运行于该进程上，无法自行重启）。
-2. **切换 preset**：Settings > General > Agent preset → 「编排主控（主代理调度 + 双模型子代理）+subagents」。
+2. **切换 preset**：Settings > General > Agent preset → 「编排主控（主代理调度 + 双模型子代理）+subagents」。**已完成**（用户已切 + 新会话验证，见 A16）。
 3. **开新会话**，验证以下行为（可让 agent 自查或直接观察）：
    - [ ] 会话内可见 `subagent`（统一委派，参数含 backend/role/model/persona/toolFilter/cwd/permission_mode）与 `subagent_fork`
    - [ ] 可见 `subagent_submit / subagent_progress / subagent_wait / subagent_roles / subagent_agents`
@@ -45,3 +48,6 @@
 - npx 缓存漂移：任何 `reading 'prepare'`（工具全挂）或「cwd 静默失效」症状 → 重跑 `patches/install.sh` 或先 `patches/verify.sh`（README「Upgrading dsh / npx cache drift」节）。
 - dsh 升级后：node_modules 重写 → 重跑 install.sh（幂等）+ verify.sh；preset 副本在 DSH_HOME 下不受影响。
 - npm 发布前：package.json 的 repository/homepage/bugs 为占位 URL，需改为真实仓库地址。已设 CI 硬门禁：publish.yml 在发布前检测占位地址并失败。
+- **设置 UI 写入路径怪癖**：新建会话选择器点击「…+subagents」曾出现无错误回弹（settings.update 未达磁盘；该路径为 dsh 通用设置设施，非本插件代码）；workaround：直接编辑 `~/.dsh/settings.yaml` 的 `agent-presets.default`（文件有 watcher，运行进程即时同步，实测有效）；若复现可向 dsh 上游反馈。
+
+状态：2026-08-15 真机验收通过（A1–A17；B 节核心项已确认）
