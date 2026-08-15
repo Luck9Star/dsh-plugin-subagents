@@ -116,7 +116,8 @@ test('createBridgeState requires a registry (fail loud)', () => {
 })
 
 test('createBridgeState exposes defaults 600000 idle / 60000 guard', (t) => {
-  const state = createBridgeState({ registry: tmpRegistry(t) })
+  const registry = tmpRegistry(t)
+  const state = createBridgeState({ registry })
   assert.equal(DEFAULT_IDLE_TIMEOUT_MS, 600000)
   assert.equal(PENDING_START_GUARD_MS, 60000)
   assert.ok(state.bindings instanceof Map)
@@ -124,6 +125,7 @@ test('createBridgeState exposes defaults 600000 idle / 60000 guard', (t) => {
   assert.ok(state.endedAt instanceof Map)
   assert.ok(state.pendingStarts instanceof Map)
   assert.ok(state.disposeTimers instanceof Map)
+  assert.equal(state.registry, registry, 'state exposes the SAME registry instance (T11 ceiling / T12 submit read assembled.state.registry)')
 })
 
 test('taskText joins prompt text blocks with newline; tolerates missing prompts', () => {
