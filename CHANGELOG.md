@@ -151,3 +151,16 @@ takes over the official `subagent` / `subagent_fork` tool names.
 - `npm run lint`: `node --check` every module plus the
   `@deepseek-ai/dsh-subagent` pure-function import whitelist
   (`assertSubagentMaxDepth`, `settleRun`).
+
+### Fixed
+
+- Fixed boot failure — `inject` now declares `systemPrompt`
+  (Cordis service-access contract). The plugin directly accesses
+  `ctx.tools` / `ctx.subagents` / `ctx.systemPrompt` but `inject` was
+  `['subagents','tools','sessions']` (sessions is only reached through the
+  lazy `ctx.get('sessions')` accessor and `systemPrompt` was missing), which
+  made Cordis throw `cannot get property "systemPrompt" without inject` at
+  startup. `inject` is now `['subagents','tools','systemPrompt']`,
+  matching `legacy-cwd-plugin`, with a strict-ctx regression test that
+  emulates the Cordis inject mechanism across every `apply()` branch.
+
