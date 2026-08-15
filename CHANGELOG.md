@@ -1,0 +1,129 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [0.1.0] - Unreleased
+
+First release. `dsh-plugin-subagents` unifies and fully replaces
+`legacy-cwd-plugin` (configurable native subagents) and
+`legacy-bridges-plugin` (external agent bridges) in one plugin that
+takes over the official `subagent` / `subagent_fork` tool names.
+
+### Added
+
+**Unified tool surface**
+
+- `subagent` — single delegation entry taking over the official tool name:
+  native backend by default, `backend` / `role` switch to an external agent
+  CLI. Validation order: role resolution → backend merge →
+  parameter-capability matrix → bridge availability + permission ceiling →
+  native per-call resolution → routing.
+- `subagent_fork` — native fork variant taking over the official tool name
+  (child inherits the parent's completed turns) with per-call overrides;
+  bridge parameters fail loudly.
+- `subagent_submit` / `subagent_wait` / `subagent_roles` / `subagent_agents`
+  — the `subagent_*` helper family (renamed from the predecessor's
+  `product_submit` / `product_wait` / `product_roles` / `product_agents`).
+- `subagent_progress` — now covers native children too (session-log folding
+  plus a minimal driver snapshot), alongside bridge children.
+- The official `send_message` / `list_agents` / `interrupt_agent` / `report`
+  tools are intentionally untouched and serve both kinds of children.
+
+**Native backend**
+
+- Per-call `model` (bare id or `provider/model` composite), `provider`,
+  `persona` (including `@preset:<id | display name>` references), and
+  `toolFilter` overrides — all through native rc.6 request fields, no
+  patches required.
+- Per-call `cwd` via two minimal anchored patches (one-shot driver package +
+  the continuable manager in the `dsh-subagent` bundle), distributed and
+  verified by the installer/doctor below.
+- Three delegation routes: foreground sync, one-shot background job (harness
+  jobs integration), and continuable child (`startContinuable`).
+
+**Bridge backends**
+
+- Claude Code, Codex, and generic ACP bridges migrated from
+  `legacy-bridges-plugin` (bridge contract unchanged:
+  `create` / `submit` / `reconnect` / `dispose`).
+- Any ACP CLI joins through `config.providers` with zero code (e.g. grok).
+- Providers register only when their CLI is detected on `PATH` (parallel
+  detection; CLIs are never executed during detection).
+- Delegation permission ceiling: `readonly < default < full` cannot be raised
+  down the delegation tree; unknown stored modes fail closed to `readonly`;
+  recovery restores the recorded settings.
+- Bridge lifecycle governance: concurrency slots, idle disposal,
+  pending-start guard, teardown — migrated unchanged.
+
+**Durability & migration**
+
+- Durable registry at `~/.dsh/subagents-registry.json`: owner-only `0600`
+  atomic writes, 500-entry pruning, hostile-key (`__proto__` …) protection.
+- One-time migration from the predecessor's
+  `~/.dsh/product-subagents-registry.json` (`.migrated` marker, legacy file
+  left in place), with optional `product_submit` / `product_delegate` alias
+  tools (`legacyProductAliases`, default `auto`) so recovered legacy relay
+  children keep working.
+
+**Roles**
+
+- Declarative role library (`roles/*.json`) with the new `backend` field
+  (`'native'` | a bridge provider name | `''` = caller chooses) and
+  native-only `overrides` (`agentOptions` / `persona` / `toolFilter` /
+  `maxDepth`).
+- Six default roles: `general`, `explore`, `code-review`, `debug`,
+  `codex-full`, `claude-readonly`. Unknown role ids fail loudly; only an
+  omitted role defaults to `general`.
+
+**Installation & compatibility**
+
+- Bundle-type plugin (`dsh.bundle.patch`): disables the official
+  `tool-subagent` / `tool-subagent-fork` rows (required in headless, idempotent
+  in web) and registers one global instance holding all shared state;
+  `presetRow` instances are stateless and coexist safely.
+- Two-stage installer `patches/install.sh | .ps1`: Stage A (mandatory, first,
+  never blocked) repairs both `dsh-tools` references (plugin repo + every
+  profile) to the live harness root; Stage B applies the cwd patches through a
+  per-patch four-state machine with `.bak_cwd` backups, `node --check`
+  verification, and loud drift failures. `--links-only` runs Stage A only.
+- "dsh supports per-call cwd natively" can only be recorded after a hard
+  double gate — a manually verified version whitelist (initially empty) AND a
+  behavioral probe observing the child session's `meta.cwd` through the live
+  subagent path; whole-file grepping is forbidden as evidence.
+- Read-only doctor `patches/verify.sh | .ps1`: live root, both patches (two
+  files, two merge points, checked separately), both `dsh-tools` links,
+  repo-copy version drift (warning only); any drift exits non-zero with a
+  one-line fix hint; `--probe` re-runs the behavioral probe.
+- `patches/uninstall.sh | .ps1` restores patch backups and removes the stamp;
+  deliberately does not roll back the Stage A links (deployment health, not
+  plugin state).
+- Live-root resolution is always dynamic (`which dsh` → realpath → walk up to
+  `node_modules`; `DSH_HARNESS_ROOT` override) — no hardcoded paths, no
+  `ls | tail -1` heuristics; survives npx cache switches.
+- Preset adaptation `scripts/install-preset.sh | .ps1`: L1 (default) copies
+  the source preset and deletes the generic delegation rows so the plugin's
+  tools show through; L2 (`--enhance-rows`) rewrites official subagent rows to
+  this plugin with `presetRow: true`. Idempotent; the source preset is never
+  modified; POSIX sh + PowerShell.
+- Enforced mutual exclusion with `legacy-cwd-plugin` / `dsh-subagent-tools`
+  (duplicate tool registration) and `legacy-bridges-plugin` (duplicate
+  bridge provider registration) — both fail loudly at startup by design.
+- Strict zod config with two branches: the full plugin schema and the
+  official preset-row shape; unknown keys fail loudly at apply time.
+- dsh-tools double-instance self-check at apply time: detects the second
+  module instance (scheduler Symbol missing) and fails with the dedupe fix
+  guidance instead of letting every tool call die later.
+
+**Docs & tests**
+
+- Bilingual README (effect matrix, mutual-exclusion table, six-step install,
+  npx-cache drift playbook), CHANGELOG, AGENTS.md (design red lines),
+  SECURITY.md.
+- 304 `node:test` cases — pure logic plus fake bridge / driver / ctx; the
+  suite never requires a real CLI, a key, or a network.
+- `npm run lint`: `node --check` every module plus the
+  `@deepseek-ai/dsh-subagent` pure-function import whitelist
+  (`assertSubagentMaxDepth`, `settleRun`).
