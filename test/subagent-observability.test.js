@@ -106,13 +106,13 @@ function observCtx({ children = [], listDelayMs = 0, listError, sessions } = {})
   }
 }
 
-/** fake assembled（progress 用）：native driver 的 progress 可注入 + 调用记录。 */
+/** fake assembled（progress 用）：native driver 的 progress 可注入 + 调用记录（[childId, parentSessionId]）。 */
 function progressAssembled({ snapshots = {}, bindings = new Map(), progressCalls } = {}) {
   const spawn = {
     id: 'native:spawn',
     kind: 'native',
-    async progress(childId) {
-      if (progressCalls) progressCalls.push(childId)
+    async progress(childId, parentSessionId) {
+      if (progressCalls) progressCalls.push([childId, parentSessionId])
       return snapshots[childId] || { childId, status: 'unknown' }
     },
   }
@@ -317,6 +317,20 @@ test('progress: native path — driver snapshot is the fallback when the listing
     tokenUsage: undefined,
     trace: undefined,
   })
+})
+
+test('progress: native path passes the parent session id down to the driver (T08 fix)', async () => {
+  const progressCalls = []
+  const assembled = progressAssembled({
+    progressCalls,
+    snapshots: { 'c-native': { childId: 'c-native', status: 'running' } },
+  })
+  const ctx = observCtx({ children: [] })
+  registerSubagentProgress(ctx, { assembled, ...realFolds })
+  await ctx.tool('subagent_progress').execute({ subagent_id: 'c-native' }, exec)
+  // exec.agent.session.id ('parent-1' in the shared exec fixture) must reach
+  // driver.progress as the parent-scoping argument.
+  assert.deepEqual(progressCalls, [['c-native', 'parent-1']])
 })
 
 test('progress: native path — session evidence maps an unlisted child to running (PS semantics)', async () => {

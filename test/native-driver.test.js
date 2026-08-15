@@ -696,6 +696,37 @@ test('progress(): unknown when listChildren is unavailable', async () => {
   assert.deepEqual(await driver.progress('child-42'), { childId: 'child-42', status: 'unknown' })
 })
 
+test('progress(): scopes listChildren to the given parent session id (T08 fix)', async () => {
+  const children = [{ kind: 'child', id: 'child-42', activity: 'running', mode: 'continuable', label: 'x', hasChildren: false }]
+  const { ctx } = fakeCtx({ children })
+  const seen = []
+  const original = ctx.subagents.listChildren
+  ctx.subagents.listChildren = async (...args) => {
+    seen.push(args)
+    return original(...args)
+  }
+  const driver = createNativeDriver({ kind: 'spawn', ctx, config: { provider: 'spawn' } })
+  const snapshot = await driver.progress('child-42', 'parent-7')
+  // dsh-subagent's seam is listChildren(parentSessionId, signal): the parent
+  // session id string (NOT an Agent object) must reach it verbatim.
+  assert.deepEqual(seen, [['parent-7']])
+  assert.equal(snapshot.status, 'running')
+})
+
+test('progress(): without a parent keeps the legacy unscoped listing (T08 fix, back-compat)', async () => {
+  const children = [{ kind: 'child', id: 'child-42', activity: 'inactive', mode: 'continuable', label: 'x', hasChildren: false }]
+  const { ctx } = fakeCtx({ children })
+  const seen = []
+  const original = ctx.subagents.listChildren
+  ctx.subagents.listChildren = async (...args) => {
+    seen.push(args)
+    return original(...args)
+  }
+  const driver = createNativeDriver({ kind: 'spawn', ctx, config: { provider: 'spawn' } })
+  assert.equal((await driver.progress('child-42')).status, 'inactive')
+  assert.deepEqual(seen, [[undefined]])
+})
+
 test('dispose(): no-op that resolves', async () => {
   const { ctx } = fakeCtx()
   const driver = createNativeDriver({ kind: 'spawn', ctx, config: { provider: 'spawn' } })
