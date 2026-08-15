@@ -35,6 +35,18 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
       - run: npm ci
       - run: npm test
+      # Hard gate: npm trusted publishing + `--provenance` require the
+      # repository url in package.json to match the real GitHub repo. The
+      # placeholder URL breaks provenance, so fail loudly before publishing.
+      - run: |
+          node -e '
+            const f = require("fs");
+            const url = JSON.parse(f.readFileSync("package.json", "utf8")).repository?.url || "";
+            if (url.includes("github.com/dsh-plugin-subagents/dsh-plugin-subagents")) {
+              console.error("publish aborted: replace the placeholder repository URL in package.json with the real repo before publishing");
+              process.exit(1);
+            }
+          '
       - run: npm publish --provenance --access public
         env:
           # Do NOT add NODE_AUTH_TOKEN: trusted publishing authenticates via

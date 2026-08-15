@@ -38,4 +38,4 @@
 
 - npx 缓存漂移：任何 `reading 'prepare'`（工具全挂）或「cwd 静默失效」症状 → 重跑 `patches/install.sh` 或先 `patches/verify.sh`（README「Upgrading dsh / npx cache drift」节）。
 - dsh 升级后：node_modules 重写 → 重跑 install.sh（幂等）+ verify.sh；preset 副本在 DSH_HOME 下不受影响。
-- npm 发布前：package.json 的 repository/homepage/bugs 为占位 URL，需改为真实仓库地址。
+- npm 发布前：package.json 的 repository/homepage/bugs 为占位 URL，需改为真实仓库地址。已设 CI 硬门禁：publish.yml 在发布前检测占位地址并失败。

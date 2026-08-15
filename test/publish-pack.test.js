@@ -125,3 +125,20 @@ test('npm pack --dry-run contains no docs/ or test/ prefixed entries', async (t)
     `packed file list must not contain docs/ or test/ entries, got: ${bad.join(', ')}`,
   )
 })
+
+test('publish.yml guards against the placeholder repository URL before publishing', () => {
+  const workflowPath = resolve(PKG_DIR, '.github', 'workflows', 'publish.yml')
+  const workflow = readFileSync(workflowPath, 'utf8')
+  // CI must abort publishing when package.json still carries the placeholder
+  // repo URL (trusted publishing + --provenance break on a wrong repository).
+  assert.match(
+    workflow,
+    /github\.com\/dsh-plugin-subagents\/dsh-plugin-subagents/,
+    'publish.yml must detect the placeholder repository URL',
+  )
+  assert.match(
+    workflow,
+    /npm publish --provenance --access public/,
+    'publish.yml must still run npm publish with provenance afterward',
+  )
+})
