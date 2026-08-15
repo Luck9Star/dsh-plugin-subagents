@@ -211,8 +211,6 @@ test('strict ctx: default global branch (backgroundMode default → continuable 
   const expected = ['subagent', 'subagent_fork', 'subagent_submit', 'subagent_progress',
     'subagent_wait', 'subagent_roles', 'subagent_agents']
   assert.deepEqual([...ctx.__tools.keys()].sort(), [...expected].sort(), 'all seven tools registered')
-  // 断言确实触发了 systemPrompt.section（continuable 默认路径覆盖）。
-  assert.equal(out.presetRow, false)
   // teardown effect 由 attachAll → attachBridgeLifecycle 注册。
   assert.equal(ctx.__teardowns.length, 1)
 })
@@ -226,10 +224,23 @@ test('strict ctx: presetRow branch (native-only single tool) registers without i
   const before = ctx.__tools.size
 
   // presetRow 行：provider required + 独立 toolName；只注册单工具。
-  const out = await apply(ctx, { presetRow: true, provider: 'spawn', toolName: 'scout_agent', maxDepth: 1 })
+  await apply(ctx, { presetRow: true, provider: 'spawn', toolName: 'scout_agent', maxDepth: 1 })
 
-  assert.equal(out.presetRow, true)
   assert.equal(ctx.__tools.has('scout_agent'), true, 'presetRow tool registered')
   assert.equal(ctx.__tools.size, before + 1, 'exactly one new tool from the presetRow row')
   // presetRow requireRProvider: 'spawn' 命中 fake subagents.getProvider → 无死分支。
+})
+
+test('apply() resolves to undefined on every branch — the Cordis loader contract', async (t) => {
+  const { dir, done } = tempDir()
+  shim(dir, 'codex-cli')
+  t.after(done)
+  // Cordis treats the plugin callback's return value as a disposable; a
+  // non-nullable non-function return fails real boots with 'Invalid effect'
+  // (safeCollect → `TypeError: Invalid effect`). Assert both branches yield
+  // exactly undefined.
+  const defaultResult = await apply(strictCtx(), sealedConfig(dir), { legacyRegistryPath: join(dir, 'absent', 'legacy-registry.json') })
+  assert.strictEqual(defaultResult, undefined, 'default global branch must resolve to undefined')
+  const presetRowResult = await apply(strictCtx(), { presetRow: true, provider: 'spawn', toolName: 'scout_agent', maxDepth: 1 })
+  assert.strictEqual(presetRowResult, undefined, 'presetRow branch must resolve to undefined')
 })

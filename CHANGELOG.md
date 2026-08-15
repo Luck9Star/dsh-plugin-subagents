@@ -163,4 +163,13 @@ takes over the official `subagent` / `subagent_fork` tool names.
   startup. `inject` is now `['subagents','tools','systemPrompt']`,
   matching `legacy-cwd-plugin`, with a strict-ctx regression test that
   emulates the Cordis inject mechanism across every `apply()` branch.
+- Fixed boot failure — `apply()` now resolves to `undefined`. The Cordis
+  loader treats the plugin callback's return value as a disposable
+  (`TypeError: Invalid effect` otherwise), but the T14 introspection build
+  returned the assembly object `{ assembled, migration, presetRow }`,
+  breaking real starts with `failed to apply loader entry subagents
+  (dsh-plugin-subagents): Invalid effect`. Internal introspection now goes
+  through the exported `assembleDrivers` / `migrateLegacyRegistry` seams and
+  the fake-ctx registration records; both `apply()` branches are covered by a
+  strict-ctx regression test asserting an `undefined` resolution.
 

@@ -29,6 +29,9 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { apply, name as pluginName } from '../lib/index.js'
+import { assembleDrivers, attachAll } from '../lib/drivers/index.js'
+import { migrateLegacyRegistry } from '../lib/registry.js'
+import { registerSubagentSubmit } from '../lib/tools/subagent-submit.js'
 import { TOOL_RUNTIME_SCHEDULER } from '@deepseek-ai/dsh-tools'
 
 const IS_WIN = process.platform === 'win32'
@@ -130,15 +133,13 @@ test('apply(): default global wiring — seven default-named tools, provider reg
   shim(dir, 'codex-cli')
   t.after(done)
   const ctx = fakeCtx()
-  const out = await apply(ctx, shimmedConfig(dir), { legacyRegistryPath: absentLegacy(dir) })
+  await apply(ctx, shimmedConfig(dir), { legacyRegistryPath: absentLegacy(dir) })
 
   assert.deepEqual([...ctx.__tools.keys()].sort(), [...DEFAULT_TOOLS].sort())
   // availability-detected codex (shim) → exactly one provider registration
   assert.deepEqual(ctx.__registered.map((p) => p.name), ['codex'])
   // teardown effect registered by attachAll → attachBridgeLifecycle
   assert.equal(ctx.__teardowns.length, 1)
-  assert.equal(out.presetRow, false)
-  assert.ok(out.assembled.state && out.assembled.state.registry, 'assembled state exposed for tests')
   // fake tool host cannot be verified → one warn, never fatal
   assert.equal(ctx.__logs.fatal.length, 0)
 })
@@ -174,7 +175,10 @@ test('apply(): teardown effect calls state.disposeAll', async (t) => {
   shim(dir, 'codex-cli')
   t.after(done)
   const ctx = fakeCtx()
-  const { assembled } = await apply(ctx, shimmedConfig(dir), { legacyRegistryPath: absentLegacy(dir) })
+  // apply must resolve to undefined (loader contract), so inspect the assembled
+  // state directly through the internal assembly seam.
+  const assembled = await assembleDrivers({ ctx, config: shimmedConfig(dir) })
+  attachAll(ctx, assembled) // registers the ctx.effect teardown that closes over state.disposeAll
   const original = assembled.state.disposeAll
   let calls = 0
   assembled.state.disposeAll = () => { calls += 1; original() }
@@ -227,14 +231,13 @@ test('presetRow standalone: exactly one tool, zero providers, no auxiliaries, no
   // A legacy registry exists — proving the presetRow branch never migrates.
   const legacyPath = legacyRegistry(dir)
 
-  const out = await apply(ctx, { presetRow: true, provider: 'spawn' }, { legacyRegistryPath: legacyPath })
+  await apply(ctx, { presetRow: true, provider: 'spawn' }, { legacyRegistryPath: legacyPath })
 
   assert.deepEqual([...ctx.__tools.keys()], ['subagent'])
   assert.equal(ctx.__registered.length, 0)
   assert.equal(ctx.__teardowns.length, 0, 'presetRow holds no bridge state → no teardown')
   assert.equal(existsSync(join(dir, 'product-subagents-registry.migrated')), false, 'no migration marker')
   assert.equal(existsSync(legacyPath), true, 'legacy file untouched')
-  assert.equal(out.presetRow, true)
 })
 
 // ---- registry 迁移与 legacy 别名（§6.6） ----
@@ -257,8 +260,9 @@ test('migration: imports legacy entries (product → backend), writes the marker
   const registryPath = join(dir, 'subagents-registry.json')
   const markerPath = join(dir, 'subagents-registry.migrated')
 
-  const ctx = fakeCtx()
-  const { migration } = await apply(ctx, shimmedConfig(dir, { registryPath }), { legacyRegistryPath: legacyPath })
+  // apply resolves undefined (loader contract); the migration goes straight to
+  // the internal migrateLegacyRegistry seam it wraps.
+  const migration = migrateLegacyRegistry({ legacyPath, targetPath: registryPath })
 
   assert.equal(migration.performed, true)
   assert.equal(migration.imported, 2)
@@ -284,7 +288,8 @@ test('migration: a second apply does not re-import (target exists + marker)', as
 
   // Simulate a restart: a fresh process/apply on the same paths.
   const second = fakeCtx()
-  const { migration } = await apply(second, shimmedConfig(dir, { registryPath }), { legacyRegistryPath: legacyPath })
+  await apply(second, shimmedConfig(dir, { registryPath }), { legacyRegistryPath: legacyPath })
+  const migration = migrateLegacyRegistry({ legacyPath, targetPath: registryPath })
   assert.equal(migration.performed, false)
   // the marker is checked first (belt), an existing target would also guard (braces)
   assert.equal(migration.reason, 'marker-exists')
@@ -327,7 +332,14 @@ test('alias product_submit: same recovery pipe under the old name (fake bridge, 
   const legacyPath = legacyRegistry(dir)
   const registryPath = join(dir, 'subagents-registry.json')
   const ctx = fakeCtx()
-  const { assembled } = await apply(ctx, shimmedConfig(dir, { registryPath }), { legacyRegistryPath: legacyPath })
+  const config = shimmedConfig(dir, { registryPath })
+  // apply resolves undefined (loader contract); drive the same assembly plus the
+  // alias registration apply performs against one assembled whose state we can
+  // preload with a binding the tool's recovery pipe reads.
+  const assembled = await assembleDrivers({ ctx, config })
+  attachAll(ctx, assembled)
+  migrateLegacyRegistry({ legacyPath, targetPath: registryPath })
+  registerSubagentSubmit(ctx, { assembled, config, toolName: 'product_submit' })
 
   // A live binding for the calling session → the alias drives the same
   // bridge.submit path and appends the PRODUCT_SESSION marker line.
@@ -392,12 +404,11 @@ test('alias product_delegate: loud when the unified delegate tool is not registe
   t.after(done)
   const legacyPath = legacyRegistry(dir)
   const ctx = fakeCtx()
-  const { assembled } = await apply(
+  await apply(
     ctx,
     shimmedConfig(dir, { registryPath: join(dir, 'subagents-registry.json'), legacyProductAliases: true }),
     { legacyRegistryPath: legacyPath },
   )
-  void assembled
   // The alias resolves its delegate target AT CALL TIME; drop the unified tool
   // from the registry to simulate register.delegate=false deployments.
   ctx.__tools.delete('subagent')
@@ -451,8 +462,7 @@ test('self-check: unverifiable host shape → warn only, apply proceeds', async 
   const { dir, done } = tempDir()
   t.after(done)
   const ctx = fakeCtx() // register/get only — no symbol, no view/schemas
-  const out = await apply(ctx, { registryPath: join(dir, 'registry', 'subagents-registry.json') }, { legacyRegistryPath: absentLegacy(dir) })
-  assert.equal(out.presetRow, false)
+  await apply(ctx, { registryPath: join(dir, 'registry', 'subagents-registry.json') }, { legacyRegistryPath: absentLegacy(dir) })
   assert.equal(ctx.__logs.fatal.length, 0)
   assert.equal(ctx.__logs.warn.length, 1)
   assert.match(ctx.__logs.warn[0], /patches\/verify/)
