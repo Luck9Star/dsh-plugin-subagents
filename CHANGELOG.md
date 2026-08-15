@@ -130,7 +130,8 @@ takes over the official `subagent` / `subagent_fork` tool names.
 - `npm run lint` now also enforces the `@deepseek-ai/dsh-subagent`
   pure-function import whitelist (red line 12, `{ assertSubagentMaxDepth,
   settleRun }`) across `lib/`, `test/`, `scripts/`; a violation is reported
-  as `file:line: illegal import …`.
+  as `file:line: illegal import …`. The whitelist captures named, namespace,
+  dynamic-import and require forms.
 - Publish metadata in `package.json`: a `files` whitelist (`lib/`, `roles/`,
   `patches/`, `scripts/`, `cordis.patch.yml`, `README*`, `CHANGELOG`,
   `LICENSE`, …), `repository` / `bugs` / `homepage` (placeholder URLs — must

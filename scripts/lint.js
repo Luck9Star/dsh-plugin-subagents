@@ -32,11 +32,30 @@ const IMPORT_RE = /import\s*\{([^}]*)\}\s*from\s*['"]@deepseek-ai\/dsh-subagent[
 // package).
 const NAMESPACE_RE = /import\s*\*\s*as\s+(\w+)\s*from\s*['"]@deepseek-ai\/dsh-subagent['"]/g
 
+// Dynamic `import("@…/dsh-subagent")` form — smuggles the whole module at
+// call time, bypassing the static brace whitelist. Match the whole statement
+// so the reported line points at the call site. (Comment uses the package's
+// @… alias/ellipsis, staying immune to the self-scan; the regex literal below
+// is also self-immune because of its escaped `\s*` / `\(` / `\/`.)
+const DYNAMIC_RE = /import\s*\(\s*['"]@deepseek-ai\/dsh-subagent['"]\s*\)/g
+
+// CommonJS `require("@…/dsh-subagent")` form — same bypass shape as
+// DYNAMIC_RE; the whitelist stays ESM-only, so any require of the package is
+// an unconditional violation.
+const REQUIRE_RE = /require\s*\(\s*['"]@deepseek-ai\/dsh-subagent['"]\s*\)/g
+
+// Line of match start, reused by all four regex passes below.
+function lineAt(src, index) {
+  return (src.slice(0, index).match(/\n/g) || []).length + 1
+}
+
 // Iterate every explicit `from '@deepseek-ai/dsh-subagent'` named import in a
 // single source string and return each offending symbol as a line/col entry.
 // Handles both single-line (`import { a } from …`) and multi-line
 // (`import {\n  a,\n  b,\n} from …`) forms; `import * as ns` without braces is
-// not matched here and is flagged separately by NAMESPACE_RE below.
+// not matched here and is flagged separately by NAMESPACE_RE below. Dynamic
+// `import('…')` and CommonJS `require('…')` of the package are unconditional
+// violations (symbol 'dynamic-import' / 'require').
 export function checkWhitelist(sources) {
   const violations = []
   for (const file of Object.keys(sources)) {
@@ -52,19 +71,23 @@ export function checkWhitelist(sources) {
         .map((s) => s.split(/\s+as\s+/)[0].trim()) // `a as b` -> `a`
       for (const symbol of symbols) {
         if (!WHITELIST.includes(symbol)) {
-          // Offset the whole match to report the import's line.
-          const before = src.slice(0, m.index)
-          const line = (before.match(/\n/g) || []).length + 1
-          violations.push({ file, line, symbol })
+          violations.push({ file, line: lineAt(src, m.index), symbol })
         }
       }
     }
     // Namespace imports of the package are always violations.
     NAMESPACE_RE.lastIndex = 0
     while ((m = NAMESPACE_RE.exec(src)) !== null) {
-      const before = src.slice(0, m.index)
-      const line = (before.match(/\n/g) || []).length + 1
-      violations.push({ file, line, symbol: m[1] })
+      violations.push({ file, line: lineAt(src, m.index), symbol: m[1] })
+    }
+    // Dynamic import and require of the package are always violations.
+    DYNAMIC_RE.lastIndex = 0
+    while ((m = DYNAMIC_RE.exec(src)) !== null) {
+      violations.push({ file, line: lineAt(src, m.index), symbol: 'dynamic-import' })
+    }
+    REQUIRE_RE.lastIndex = 0
+    while ((m = REQUIRE_RE.exec(src)) !== null) {
+      violations.push({ file, line: lineAt(src, m.index), symbol: 'require' })
     }
   }
   return violations

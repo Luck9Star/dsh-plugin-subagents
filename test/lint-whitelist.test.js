@@ -88,6 +88,29 @@ test('violation: a namespace import of the package is always reported (red line 
   assert.equal(r[0].symbol, 'ns')
 })
 
+test('violation: a dynamic import() of the package is always reported', () => {
+  // Dynamic `import("@…/dsh-subagent")` evaluates the whole module at call
+  // time, bypassing the static named whitelist, so it is an unconditional
+  // violation reported on the call-site line with symbol 'dynamic-import'.
+  const src = { 'lib/x.js': `const mod = import(${P})\nconst a = 1\n` }
+  const r = checkWhitelist(src)
+  assert.equal(r.length, 1)
+  assert.equal(r[0].file, 'lib/x.js')
+  assert.equal(r[0].line, 1)
+  assert.equal(r[0].symbol, 'dynamic-import')
+})
+
+test('violation: a require() of the package is always reported', () => {
+  // CommonJS require has no static import form to whitelist against, so any
+  // require of the package is an unconditional violation (symbol 'require').
+  const src = { 'lib/x.js': `const m = require(${P})\nconst a = 1\n` }
+  const r = checkWhitelist(src)
+  assert.equal(r.length, 1)
+  assert.equal(r[0].file, 'lib/x.js')
+  assert.equal(r[0].line, 1)
+  assert.equal(r[0].symbol, 'require')
+})
+
 test('end-to-end: `node scripts/lint.js` exits 0 on the compliant repo', () => {
   const root = fileURLToPath(new URL('..', import.meta.url))
   execFileSync(process.execPath, ['scripts/lint.js'], {
