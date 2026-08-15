@@ -1,12 +1,20 @@
 {
   "name": "dsh-plugin-subagents",
   "version": "0.1.0",
-  "description": "Unified subagent provider plugin for the DeepSeek Harness (T01 scaffold placeholder).",
+  "description": "Unified subagent provider plugin for the DeepSeek Harness: native in-process subagents with per-call overrides and ACP/Claude Code/Codex bridge subagents with a declarative role library, a delegation permission ceiling, and durable session recovery.",
   "type": "module",
   "main": "lib/index.js",
   "files": [
     "lib/",
+    "roles/",
+    "patches/",
+    "scripts/",
     "cordis.patch.yml",
+    "README.md",
+    "README.zh.md",
+    "CHANGELOG.md",
+    "AGENTS.md",
+    "SECURITY.md",
     "LICENSE"
   ],
   "scripts": {
@@ -18,13 +26,23 @@
     "deepseek-harness",
     "cordis",
     "subagent",
+    "unified",
     "acp",
     "claude-code",
-    "codex"
+    "codex",
+    "agent-client-protocol"
   ],
   "engines": {
     "node": ">=18"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dsh-plugin-subagents/dsh-plugin-subagents.git"
+  },
+  "bugs": {
+    "url": "https://github.com/dsh-plugin-subagents/dsh-plugin-subagents/issues"
+  },
+  "homepage": "https://github.com/dsh-plugin-subagents/dsh-plugin-subagents#readme",
   "dependencies": {
     "@agentclientprotocol/sdk": "^0.25.0",
     "zod": "^3.23.0",
