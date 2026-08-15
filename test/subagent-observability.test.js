@@ -26,6 +26,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { snapshotJsonValue } from '@deepseek-ai/dsh-session'
 import { registerSubagentWait } from '../lib/tools/subagent-wait.js'
 import { registerSubagentProgress } from '../lib/tools/subagent-progress.js'
 import { registerSubagentRoles } from '../lib/tools/subagent-roles.js'
@@ -35,6 +36,20 @@ import { createRoleLibrary } from '../lib/roles.js'
 
 /** 与 apply 层一致的折叠函数接线（真实实现，非 fake）。 */
 const realFolds = { foldProgress, foldTrace, foldTokenUsage }
+
+/**
+ * E3 门禁：dsh-tools 对每个工具返回值做 snapshotJsonValue 快照 —— 返回
+ * undefined 即生产路径的 "value is not lossless JSON"（undefined 值键、
+ * Date/Map、稀疏数组、循环引用等形状整体拒绝）。观测族工具出口必须过
+ * 这道与生产完全相同的闸（全套定向用例见 test/json-safe.test.js）。
+ */
+function assertLosslessJsonValue(value) {
+  assert.notEqual(
+    snapshotJsonValue(value),
+    undefined,
+    'tool output must survive dsh-tools\' lossless-JSON snapshot (E3: value is not lossless JSON)',
+  )
+}
 
 const exec = { agent: { session: { id: 'parent-1', header: { cwd: '/tmp' } } }, signal: undefined }
 
@@ -304,19 +319,15 @@ test('progress: native path — driver snapshot is the fallback when the listing
   const ctx = observCtx({ listError: new Error('listing unavailable') })
   registerSubagentProgress(ctx, { assembled, ...realFolds })
   const out = await ctx.tool('subagent_progress').execute({ subagent_id: 'c-native' }, exec)
+  // E3 contract: unset optional fields are OMITTED (undefined-valued keys are
+  // rejected by dsh-tools' lossless-JSON snapshot — see test/json-safe.test.js).
   assert.deepEqual(out, {
     childId: 'c-native',
     status: 'inactive',
-    mode: undefined,
     label: 'forked helper',
-    turn: undefined,
     stepCount: 0,
-    lastTask: undefined,
-    lastAnswer: undefined,
-    lastActivityAt: undefined,
-    tokenUsage: undefined,
-    trace: undefined,
   })
+  assertLosslessJsonValue(out)
 })
 
 test('progress: native path passes the parent session id down to the driver (T08 fix)', async () => {
@@ -351,19 +362,14 @@ test('progress: no binding, no driver knowledge, no session → unknown', async 
   const ctx = observCtx({ children: [] })
   registerSubagentProgress(ctx, { assembled, ...realFolds })
   const out = await ctx.tool('subagent_progress').execute({ subagent_id: 'ghost' }, exec)
+  // E3 contract: unset optional fields are OMITTED (undefined-valued keys are
+  // rejected by dsh-tools' lossless-JSON snapshot — see test/json-safe.test.js).
   assert.deepEqual(out, {
     childId: 'ghost',
     status: 'unknown',
-    mode: undefined,
-    label: undefined,
-    turn: undefined,
     stepCount: 0,
-    lastTask: undefined,
-    lastAnswer: undefined,
-    lastActivityAt: undefined,
-    tokenUsage: undefined,
-    trace: undefined,
   })
+  assertLosslessJsonValue(out)
 })
 
 test('progress: registration guards — native.spawn and state.bindings are required', () => {

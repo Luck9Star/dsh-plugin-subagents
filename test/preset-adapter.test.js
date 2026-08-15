@@ -19,6 +19,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { isMap, isSeq, parseDocument } from 'yaml'
+import { validateConfig } from '../lib/config.js'
 import {
   MARKER_FILENAME,
   OFFICIAL_ROW_NAME,
@@ -165,6 +166,75 @@ const SAMPLE_C = `- id: persona
       No delegation rows here.
 `
 
+// Sample D mirrors the REAL orchestrator zoo — the regression fixture for the
+// 2026-08-15 smoke incident: L2 rewrote the fork row (provider fork,
+// toolName subagent_fork) into a presetRow, which lib/config.js rejects
+// (presetRow registers a SPAWN-semantics delegate; the name collides with the
+// global instance's fork tool), so the WHOLE preset failed to mount and the
+// session silently fell back to standard.
+const SAMPLE_D = `- id: delegation
+  name: cordis:group
+  group: true
+  isolate:
+    workflowEngine: true
+  config:
+    # spawn-semantics role row — a legal L2 rewrite target.
+    - id: tool-subagent-plan
+      name: '@deepseek-ai/dsh-tool-subagent'
+      config:
+        provider: spawn
+        toolName: plan_agent
+        backgroundMode: continuable
+        agentOptions:
+          provider: newapi
+          model: glm-5.3
+        maxDepth: 1
+
+    # generic delegation row (spawn semantics, official default name).
+    - id: tool-subagent
+      name: '@deepseek-ai/dsh-tool-subagent'
+      config:
+        provider: spawn
+        toolName: subagent
+        backgroundMode: continuable
+
+    # fork row — fork semantics cannot be hosted by a presetRow instance.
+    - id: tool-subagent-fork
+      name: '@deepseek-ai/dsh-tool-subagent'
+      config:
+        provider: fork
+        toolName: subagent_fork
+        backgroundMode: continuable
+        agentOptions:
+          provider: newapi
+          model: glm-5.3
+        toolFilter:
+          deny:
+            - write
+            - edit
+        maxDepth: 1
+
+    # bridge template rows (disabled by default) — bridge delegation cannot be
+    # hosted by a presetRow instance either.
+    - id: tool-subagent-codex
+      name: '@deepseek-ai/dsh-tool-subagent'
+      disabled: true
+      config:
+        provider: codex
+        toolName: subagent_codex
+        enableRunInBackground: false
+        maxDepth: provider-managed
+
+    - id: tool-subagent-claude-code
+      name: '@deepseek-ai/dsh-tool-subagent'
+      disabled: true
+      config:
+        provider: claude-code
+        toolName: subagent_claude_code
+        enableRunInBackground: false
+        maxDepth: provider-managed
+`
+
 // ── helpers ─────────────────────────────────────────────────────────────────
 
 // Plain-JS projection of a YAML AST node. `!!js` expressions (cordis custom
@@ -275,32 +345,13 @@ test('L1 on orchestrator shape deletes nothing (no-op adaptation)', () => {
   )
 })
 
-test('L2 on standard shape rewrites every official row, keeps config, deletes nothing', () => {
-  const before = rowsOf(SAMPLE_A)
-  const adapted = adaptAgentCordisYml(SAMPLE_A, 'l2')
-  assert.equal(adapted.enhanced, 3, '2 generic rows + 1 disabled product row')
-  assert.equal(adapted.removed, 0)
-
-  const after = rowsOf(adapted.text)
-  assert.equal(after.length, before.length, 'L2 never deletes rows')
-  const rewritten = after.filter((r) => r.name === PLUGIN_ROW_NAME)
-  assert.equal(rewritten.length, 3)
-  assert.equal(after.filter((r) => r.name === OFFICIAL_ROW_NAME).length, 0)
-  for (const row of rewritten) {
-    assert.equal(row.config.presetRow, true, 'presetRow: true added')
-  }
-  const codex = after.find((r) => r.id === 'tool-subagent-codex')
-  assert.equal(codex.disabled, true, 'disabled stays')
-  assert.deepEqual(
-    { ...codex.config, presetRow: undefined },
-    { provider: 'codex', toolName: 'subagent_codex', enableRunInBackground: false, maxDepth: 'provider-managed', presetRow: undefined },
-    'original config keys survive next to presetRow'
-  )
-  const fork = after.find((r) => r.id === 'tool-subagent-fork')
-  assert.equal(fork.config.provider, 'fork')
-  assert.equal(fork.config.toolName, 'subagent_fork')
-  assert.equal(fork.config.backgroundMode, 'continuable')
-  assert.ok(adapted.text.includes("disabled: !!js process.platform === 'win32'"), '!!js tag preserved')
+test('L2 on standard shape fails loud — every official row is generic or a bridge template', () => {
+  // The standard shape has NO row a presetRow can host (spawn + distinct
+  // toolName): the generic subagent/subagent_fork rows and the disabled
+  // bridge template rows are all deletion candidates, so there is nothing to
+  // enhance and --enhance-rows fails loud instead of producing a copy whose
+  // delegation group would be emptied. Standard-shaped presets are L1 land.
+  assert.throws(() => adaptAgentCordisYml(SAMPLE_A, 'l2'), /nothing to enhance/)
 })
 
 test('L2 on orchestrator shape enhances role rows preserving agentOptions/persona/toolFilter/maxDepth', () => {
@@ -338,6 +389,77 @@ test('L2 on orchestrator shape enhances role rows preserving agentOptions/person
 
 test('L2 with zero official rows fails loud (anchor mismatch)', () => {
   assert.throws(() => adaptAgentCordisYml(SAMPLE_C, 'l2'), /nothing to enhance/)
+})
+
+// ── mount-validity hard gate (2026-08-15 smoke regression) ──────────────────
+//
+// The incident: L2 rewrote the orchestrator preset's fork row into
+// `presetRow: true, provider: fork, toolName: subagent_fork`, which the
+// plugin's own validateConfig REJECTS (spawn-semantics row misusing the global
+// fork tool's default name) — so the entire preset failed to mount, the web
+// app fell back to standard, and the smoke session ran the official 3-param
+// subagent instead of the plugin's full-parameter one. This gate must fail on
+// any adapter output that could not mount: EVERY row the product leaves on
+// `name: dsh-plugin-subagents` has to pass the plugin's own config validation
+// (with `disabled` cleared — a template row the user enables must mount too),
+// and must not take over the global instance's tool names.
+test('L1/L2 products: every dsh-plugin-subagents row passes validateConfig and never takes a global tool name', () => {
+  for (const mode of ['l1', 'l2']) {
+    const adapted = adaptAgentCordisYml(SAMPLE_D, mode)
+    const rows = rowsOf(adapted.text)
+    const pluginRows = rows.filter((r) => r.name === PLUGIN_ROW_NAME)
+    if (mode === 'l2') {
+      assert.ok(pluginRows.length > 0, 'L2 rewrites the spawn role rows')
+    } else {
+      assert.equal(pluginRows.length, 0, 'L1 never rewrites rows (un-shadow only)')
+    }
+    for (const row of pluginRows) {
+      assert.notEqual(
+        row.config?.toolName,
+        undefined,
+        `${mode}: a rewritten row must keep a toolName`,
+      )
+      assert.ok(
+        !['subagent', 'subagent_fork'].includes(row.config.toolName),
+        `${mode}: rewritten row toolName must differ from the global instance's delegate/fork names`,
+      )
+      // mount-validity: exactly what the cordis loader does when the row is
+      // enabled — disabled: true rows are validated here with the flag cleared
+      // (a user flipping `disabled` must never produce an unmountable preset).
+      assert.doesNotThrow(
+        () => validateConfig({ ...row.config, presetRow: true }),
+        `${mode}: row "${row.id}" config must pass the plugin's validateConfig`,
+      )
+    }
+    // In an L2 product no official row may survive: it would shadow the
+    // global instance's unified tools (the very problem adaptation solves).
+    // (L1 keeps official rows by design — it only deletes the generic ones.)
+    if (mode === 'l2') {
+      assert.equal(
+        rows.filter((r) => r.name === OFFICIAL_ROW_NAME).length,
+        0,
+        'l2: no official dsh-tool-subagent rows may remain (they shadow the global tools)',
+      )
+    }
+  }
+})
+
+test('L2 on the full row zoo drops generic/fork/bridge rows and keeps only spawn-semantics rewrites', () => {
+  const adapted = adaptAgentCordisYml(SAMPLE_D, 'l2')
+  assert.equal(adapted.enhanced, 1, 'only the spawn plan row is rewritten')
+  assert.equal(adapted.removed, 4, 'generic + fork + two bridge rows are dropped')
+
+  const rows = rowsOf(adapted.text)
+  const ids = rows.map((r) => r.id)
+  assert.deepEqual(
+    ids,
+    ['delegation', 'tool-subagent-plan'],
+    'generic (tool-subagent), fork (tool-subagent-fork), and bridge template rows (codex/claude-code) are all deleted',
+  )
+  const plan = rows.find((r) => r.id === 'tool-subagent-plan')
+  assert.equal(plan.name, PLUGIN_ROW_NAME)
+  assert.equal(plan.config.presetRow, true)
+  assert.equal(plan.config.toolName, 'plan_agent')
 })
 
 // ── preset.yml handling ─────────────────────────────────────────────────────

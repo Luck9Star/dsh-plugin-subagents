@@ -427,8 +427,12 @@ strict：未知键 fail loud（含中文报错文案沿 legacy-bridges-plugin �
 4. 写 `preset.yml`（name `<源名>+subagents`）；提示用户在 UI 切换（`recompose` 仅限空白会话，README 说明需新会话）。
    —— 相比 legacy-cwd-plugin 的"改写行 name"方案，L1 不产生第二个插件实例，无状态割裂/重名风险；补 legacy-cwd-plugin 缺失的 POSIX 版。
 
-**L2（opt-in，`--enhance-rows`，服务 orchestrator 类 preset）**：把副本中所有 `name: '@deepseek-ai/dsh-tool-subagent'` 行改写为 `name: 'dsh-plugin-subagents'` + 追加 `presetRow: true`。本插件 apply() 在 presetRow 模式下：只注册该行 `toolName` 的工具（native 语义 + 全部 per-call 增强 + cwd），不注册 provider / 辅助工具 / 不读 bridge 配置（provider 由全局实例注册，seam 是进程级服务，跨实例解析无碍；全局实例缺失时 bridge 委派给明确错误）。**多 presetRow 实例并存安全**：无 provider 重名注册、无辅助工具重名注册、registry/binding 仅全局实例持有。
-   —— 保留用户 orchestrator preset 的"每行一个 (角色,模型) 组合"模式并获得 cwd/@preset/per-call 增强。
+**L2（opt-in，`--enhance-rows`，服务 orchestrator 类 preset）**：**只改写 presetRow 能诚实承载的行，其余官方行一律删除**：
+   - **改写**（`name: '@deepseek-ai/dsh-tool-subagent'` 且 `provider: 'spawn'` 且 `toolName` 非 `subagent`/`subagent_fork`）→ `name: 'dsh-plugin-subagents'` + 追加 `presetRow: true`，其余 config 键全保留（官方行 config 是本插件 Config 的子集，红线 9）；
+   - **删除**：通用委派行（`toolName` 为 `subagent`/`subagent_fork` —— 与全局实例的 delegate/fork 工具撞名，全局层注册的才是全参数版）；fork 行（`provider: fork` —— presetRow 分支只装配 `createNativeDriver({kind:'spawn'})` 的 spawn 语义工具，改写 fork 行会静默篡改语义，继承上下文的委派由全局 `subagent_fork` 承担）；bridge 模板行（`provider: codex`/`claude-code`/… —— bridge 委派属全局实例 `subagent` 的 `backend=<name>` 参数，presetRow 行会把 bridge provider 名塞进 native spawn 语义、永远无法解析）。
+   **挂载有效性不变式（回归硬闸门，test/preset-adapter.test.js）**：L2 产物中每一个 `name: 'dsh-plugin-subagents'` 行在 enabled 状态下必须能通过 `lib/config.js` 的 validateConfig —— 一行挂不起来会把整个 preset 拖垮。2026-08-15 真机冒烟事故正是违反此不变式：L2 把 fork 行改写成 `presetRow: true, provider: fork, toolName: subagent_fork`，config 校验拒绝 → 整个 preset 挂载失败 → web app 静默回退 standard → 会话跑在 cordis 内置 preset 的官方 3 参数 subagent 上（C2/C3/D1/E1/E2/A2 全部 FAIL 的环境面根因）。零可改写行仍 loud 失败（`--enhance-rows` 多半指向了错误的 preset；standard 类 preset 全是通用/bridge 行，属 L1 领地）。
+   本插件 apply() 在 presetRow 模式下：只注册该行 `toolName` 的工具（native 语义 + 全部 per-call 增强 + cwd），不注册 provider / 辅助工具 / 不读 bridge 配置（provider 由全局实例注册，seam 是进程级服务，跨实例解析无碍；全局实例缺失时 bridge 委派给明确错误）。**多 presetRow 实例并存安全**：无 provider 重名注册、无辅助工具重名注册、registry/binding 仅全局实例持有。
+   —— 保留用户 orchestrator preset 的"每行一个 (角色,模型) 组合"模式并获得 cwd/@preset/per-call 增强；fork/bridge 能力不搬家、仍走全局工具。
 
 ### 6.4 cwd 补丁与 live 根管理（install / verify 双模式，两平台补齐）
 

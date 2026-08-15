@@ -50,7 +50,7 @@ dsh --profile web
 - **第 3 步即使从不用逐次调用 `cwd` 也必须跑。** A 段修复 `@deepseek-ai/dsh-tools` 的两处引用（本仓库 `node_modules` 与每个 profile 树），使其解析到 live harness 根 —— `dsh-tools` 出现第二份实体副本会让**所有**工具调用阵亡（见[升级 dsh / npx 缓存漂移](#升级-dsh--npx-缓存漂移)）。A 段先于一切执行，且绝不被 B 段阻塞。B 段应用两枚 cwd 补丁（逐枚四态判定、`.bak_cwd` 备份、`node --check` 校验、锚点漂移大声失败）。退出码：`0` 成功；`1` live 根解析或 A 段失败；`3` B 段漂移（A 段结果保留，输出会明确说明）。
   不需要逐次调用 `cwd`？跑 `./patches/install.sh --links-only` —— 只执行 A 段，不评估补丁。
 - **第 4 步** 体检 live 根、两枚 cwd 补丁（两个不同文件、两个不同合并点分别检查）、两处 `dsh-tools` 链接、以及仓库 `dsh-subagent` 副本版本偏差（仅 warning）。任一漂移 → 非零退出 + 一行修复提示。`--probe` 独立重跑行为探针做深度复核。
-- **第 5 步**：web 会话的工具面归会话的 **preset** 所有 —— preset 层同名行会遮蔽宿主面工具，官方 `standard` preset 会用 native-only 的官方版顶掉本插件的 `subagent`。脚本把源 preset 复制为 `<source>-subagents`，删除副本中的通用委派行（源永不改动），且幂等。然后**在 UI 里切换到适配副本并开新会话**（`recompose` 仅对空白会话生效）。`orchestrator` 类 preset 没有通用 subagent 行、无需适配；可选 L2：`./scripts/install-preset.sh <source> --enhance-rows` 把全部官方 subagent 行改写为本插件（`presetRow: true`），保留「每行一个 (角色, 模型) 组合」的模式并获得全部逐次调用增强。
+- **第 5 步**：web 会话的工具面归会话的 **preset** 所有 —— preset 层同名行会遮蔽宿主面工具，官方 `standard` preset 会用 native-only 的官方版顶掉本插件的 `subagent`。脚本把源 preset 复制为 `<source>-subagents`，删除副本中的通用委派行（源永不改动），且幂等。然后**在 UI 里切换到适配副本并开新会话**（`recompose` 仅对空白会话生效）。`orchestrator` 类 preset 没有通用 subagent 行、无需适配；可选 L2：`./scripts/install-preset.sh <source> --enhance-rows` 把 preset 行能诚实承载的官方行（`provider: spawn` 且 `toolName` 独立命名）改写为本插件（`presetRow: true`），保留「每行一个 (角色, 模型) 组合」的模式并获得全部逐次调用增强。其余官方行**从副本中删除**而非改写：通用 `subagent`/`subagent_fork` 行（会遮蔽全局实例的全参数工具）、`provider: fork` 行（preset 行实例只注册 spawn 语义委派 —— 继承上下文的委派由全局 `subagent_fork` 承担）、bridge 模板行（`provider: codex` / `claude-code` 等，bridge 委派属全局 `subagent` 工具的 `backend` 参数）。改写这些行要么遮蔽全局工具、要么在挂载时被本插件自身的 config 校验拒绝 —— 一行非法会把整个 preset 拖垮（2026-08-15 冒烟事故，见 docs/VERIFY.md）。
 
 ### 本地开发安装
 
@@ -169,7 +169,7 @@ bridge（自前身全量保留）：
 
 ### preset 行配置（`presetRow: true`）
 
-当 preset 行被改写为本插件（L2 `--enhance-rows`）时，该行配置按**官方工具行形状**校验：`provider`（必填）、`toolName`（默认 `subagent`），加上共享的 native 字段（`enableRunInBackground`、`backgroundMode`、`agentOptions`、`persona`、`toolFilter`、`maxDepth`、`presetHints`）。bridge 侧的键一律拒绝 —— preset 行实例是 native-only 且无状态的（provider、注册表与辅助工具属于唯一的全局实例）。`toolName` 必须与全局实例的 delegate/fork 名及其它 preset 行不同（如 `plan_agent`、`scout_agent`）。
+当 preset 行被改写为本插件（L2 `--enhance-rows`）时，该行配置按**官方工具行形状**校验：`provider`（必填）、`toolName`（默认 `subagent`），加上共享的 native 字段（`enableRunInBackground`、`backgroundMode`、`agentOptions`、`persona`、`toolFilter`、`maxDepth`、`presetHints`）。bridge 侧的键一律拒绝 —— preset 行实例是 native-only 且无状态的（provider、注册表与辅助工具属于唯一的全局实例）。`toolName` 必须与全局实例的 delegate/fork 名及其它 preset 行不同（如 `plan_agent`、`scout_agent`）。相应地，L2 适配器只改写 `provider: spawn` 且 `toolName` 独立命名的行，**删除**无法诚实承载的官方行（通用 `subagent`/`subagent_fork` 行、`provider: fork` 行、bridge 模板行）—— 留下的不可改写行会遮蔽全局工具，而不诚实的改写会在挂载时挂在本节校验上、把整个 preset 拖垮。
 
 ### 角色
 

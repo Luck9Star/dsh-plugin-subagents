@@ -154,6 +154,39 @@ takes over the official `subagent` / `subagent_fork` tool names.
 
 ### Fixed
 
+- Fixed preset adaptation L2 producing an unmountable preset (2026-08-15
+  smoke incident). `--enhance-rows` rewrote EVERY official
+  `dsh-tool-subagent` row to `presetRow: true`, including the fork row
+  (`provider: fork`, `toolName: subagent_fork`) that the plugin's own config
+  validation rejects (a presetRow registers a spawn-semantics delegate and
+  must not take the global fork tool's default name) — one invalid row took
+  the WHOLE preset down at mount time, the web app silently fell back to the
+  `standard` preset, and the session ran the official 3-parameter `subagent`
+  instead of the plugin's full-parameter tool. L2 now rewrites only the rows
+  a presetRow can honestly host (`provider: spawn` + a `toolName` distinct
+  from `subagent`/`subagent_fork`) and deletes the rest: generic rows (they
+  would shadow the global instance's delegate/fork tools), fork rows
+  (spawn-only semantics in a presetRow; context-inheriting delegation stays
+  on the global `subagent_fork`), and bridge template rows (bridge delegation
+  belongs to the global `subagent` with `backend=<name>`). A regression hard
+  gate asserts every `dsh-plugin-subagents` row in an L1/L2 product passes
+  `validateConfig` with `disabled` cleared. Zero rewritable rows still fails
+  loud (standard-shaped presets are L1 land).
+- Fixed `subagent_progress` / `subagent_wait` failing every call with
+  `returned invalid output: value is not lossless JSON` (2026-08-15 smoke
+  E3). dsh-tools snapshots every tool return through dsh-session's
+  `snapshotJsonValue`, which rejects any value carrying an own property whose
+  value is `undefined` (plus Dates, Maps/Sets, class instances, cycles, …);
+  the observability tools built returns with unconditional keys like
+  `mode: listStatus ? listStatus.mode : undefined`, guaranteed to trip the
+  gate on common paths. New `lib/json-safe.js` (`toLosslessJson`) deep
+  sanitizes tool outputs — undefined-valued keys dropped, `Date` → ISO,
+  `Map`/`Set` → arrays, `Error` → `{name, message}`, bigint → string,
+  non-finite numbers/`-0` normalized, cycles and throwing getters safe — and
+  is applied at the `subagent_progress` / `subagent_wait` / `subagent_roles` /
+  `subagent_agents` return boundaries. The delegation tools build lossless
+  values by construction (conditional spreads) and are pinned by tests
+  running the exact production snapshot gate.
 - Fixed boot failure — `inject` now declares `systemPrompt`
   (Cordis service-access contract). The plugin directly accesses
   `ctx.tools` / `ctx.subagents` / `ctx.systemPrompt` but `inject` was

@@ -13,9 +13,15 @@
 #                         subagent|subagent_fork) so the host-plane plugin
 #                         tools become visible. A preset without such rows
 #                         (e.g. `orchestrator`) is a no-op copy.
-#   L2 (-EnhanceRows)     rewrite every '@deepseek-ai/dsh-tool-subagent' row to
+#   L2 (-EnhanceRows)     rewrite the official rows a presetRow instance can
+#                         host (provider spawn + a distinct toolName) to
 #                         `name: 'dsh-plugin-subagents'` + `presetRow: true`,
-#                         keeping all other config keys and deleting nothing.
+#                         keeping every other config key; DELETE the remaining
+#                         official rows (generic subagent/subagent_fork rows,
+#                         provider-fork rows, bridge template rows) — they
+#                         would shadow the global tools or cannot mount as
+#                         presetRow rows (the global subagent / subagent_fork /
+#                         subagent backend=<bridge> cover them).
 #
 #   The actual YAML transform lives in preset-adapt.mjs (node + the repo's
 #   `yaml` dependency; round-trip safe for comments and `!!js` tags) — this

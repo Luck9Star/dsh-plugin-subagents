@@ -20,14 +20,34 @@
 //          is a no-op success: there is nothing to un-shadow, and the copy
 //          still gets the marker + preset.yml so the flow stays uniform.
 //
-//   L2 (--enhance-rows) — REWRITE every row whose `name` is
-//          '@deepseek-ai/dsh-tool-subagent' to `name: 'dsh-plugin-subagents'`
-//          and add `presetRow: true` to its config, KEEPING every other config
-//          key (the official row config is a subset of this plugin's Config —
-//          DESIGN red line 9) and deleting nothing. Serves orchestrator-style
-//          presets whose per-row (role, model) combos then gain the per-call
-//          enhancements. Zero matching rows fails loud: --enhance-rows was
-//          almost certainly aimed at the wrong preset.
+//   L2 (--enhance-rows) — REWRITE only the rows a presetRow instance can
+//          honestly host, and DELETE every other official row:
+//            • rewrite → `name: 'dsh-plugin-subagents'` + `presetRow: true`:
+//              official rows with `provider: 'spawn'` AND a `toolName` other
+//              than subagent/subagent_fork (the per-row (role, model) combos
+//              of orchestrator-style presets; every other config key is kept —
+//              the official row config is a subset of this plugin's Config,
+//              DESIGN red line 9);
+//            • delete → generic rows (toolName subagent/subagent_fork — they
+//              would collide with the global instance's delegate/fork tools,
+//              which register the full-parameter `subagent`/`subagent_fork`),
+//              fork rows (`provider: fork` — a presetRow instance registers a
+//              SPAWN-semantics delegate via createNativeDriver({kind:'spawn'}),
+//              so rewriting a fork row would silently change its semantics;
+//              context-inheriting delegation stays on the global
+//              `subagent_fork`), and bridge template rows (`provider: codex` /
+//              `claude-code` / … — bridge delegation belongs to the global
+//              instance's `subagent` with `backend=<name>`; a presetRow row
+//              would route the bridge provider name into native spawn
+//              semantics and never resolve).
+//          The mount-validity invariant (regression gate, test/preset-adapter
+//          .test.js): EVERY row the product leaves on
+//          `name: dsh-plugin-subagents` must pass lib/config.js validateConfig
+//          with `disabled` cleared — an unmountable row takes the WHOLE preset
+//          down (the 2026-08-15 smoke incident: a rewritten fork row failed
+//          validation, the web app fell back to standard, and the session ran
+//          the official 3-param subagent). Zero rewrites still fails loud:
+//          --enhance-rows was almost certainly aimed at the wrong preset.
 //
 //   The YAML transform works on the `yaml` package Document AST, so untouched
 //   nodes re-serialize verbatim: comments survive, and cordis custom tags
@@ -79,6 +99,25 @@ export function isGenericDelegationRow(row) {
   return GENERIC_TOOL_NAMES.includes(scalarString(config.get('toolName', true)))
 }
 
+/**
+ * A row L2 can honestly rewrite into a plugin presetRow (§6.3-L2): official
+ * package + `provider: 'spawn'` + a toolName distinct from the global
+ * instance's delegate/fork names (a missing toolName is the official default
+ * 'subagent' → generic → not a candidate). Everything else — generic rows,
+ * fork rows, bridge template rows, rows without a provider (required by the
+ * presetRow schema) — must be DELETED, not rewritten: a presetRow instance
+ * registers a spawn-semantics native delegate, and any row that cannot mount
+ * through lib/config.js takes the whole preset down with it.
+ */
+export function isPresetRowCandidate(row) {
+  if (!isOfficialSubagentRow(row)) return false
+  const config = row.get('config', true)
+  if (!isMap(config)) return false
+  if (scalarString(config.get('provider', true)) !== 'spawn') return false
+  const toolName = scalarString(config.get('toolName', true)) ?? 'subagent' // official default
+  return !GENERIC_TOOL_NAMES.includes(toolName)
+}
+
 // ── document transforms (exported for tests) ────────────────────────────────
 
 /**
@@ -95,26 +134,8 @@ export function transformRows(doc, mode) {
   let removed = 0
   let enhanced = 0
 
-  const walk = (seq) => {
-    // Recurse first (over a snapshot): group rows keep nested row lists in `config`.
-    for (const item of [...seq.items]) {
-      if (!isMap(item)) continue
-      const config = item.get('config', true)
-      if (isSeq(config)) walk(config)
-    }
-    if (mode === 'l2') {
-      for (const item of seq.items) {
-        if (!isOfficialSubagentRow(item)) continue
-        item.set('name', PLUGIN_ROW_NAME) // reuses the row's existing scalar style
-        const config = item.get('config', true)
-        if (isMap(config)) config.set('presetRow', true)
-        else item.set('config', { presetRow: true })
-        enhanced += 1
-      }
-      return
-    }
-    // L1: drop the generic delegation rows; keep everything else in order.
-    const kept = seq.items.filter((item) => !isGenericDelegationRow(item))
+  const dropRows = (seq, shouldDrop) => {
+    const kept = seq.items.filter((item) => !shouldDrop(item))
     if (kept.length !== seq.items.length) {
       const dropped = seq.items.length - kept.length
       seq.items = kept
@@ -123,6 +144,34 @@ export function transformRows(doc, mode) {
       if (seq.items.length > 0 && seq.items[0].spaceBefore) seq.items[0].spaceBefore = false
       removed += dropped
     }
+  }
+
+  const walk = (seq) => {
+    // Recurse first (over a snapshot): group rows keep nested row lists in `config`.
+    for (const item of [...seq.items]) {
+      if (!isMap(item)) continue
+      const config = item.get('config', true)
+      if (isSeq(config)) walk(config)
+    }
+    if (mode === 'l2') {
+      // Rewrite only the spawn-semantics role rows a presetRow can host; drop
+      // every other official row (generic / fork / bridge — see the header).
+      // An official row left behind would shadow the global instance's tools,
+      // and a dishonest rewrite would fail validateConfig at mount time and
+      // take the whole preset down (the 2026-08-15 smoke incident).
+      for (const item of seq.items) {
+        if (!isPresetRowCandidate(item)) continue
+        item.set('name', PLUGIN_ROW_NAME) // reuses the row's existing scalar style
+        const config = item.get('config', true)
+        if (isMap(config)) config.set('presetRow', true)
+        else item.set('config', { presetRow: true })
+        enhanced += 1
+      }
+      dropRows(seq, isOfficialSubagentRow)
+      return
+    }
+    // L1: drop the generic delegation rows; keep everything else in order.
+    dropRows(seq, isGenericDelegationRow)
   }
 
   walk(root)
@@ -147,8 +196,11 @@ export function adaptAgentCordisYml(text, mode) {
     // Loud anchor mismatch: L2 was explicitly requested, but there is nothing
     // to enhance — wrong preset or dsh layout drift (TASKS T17: 锚失配 loud).
     throw new Error(
-      `${AGENT_YML}: no rows with name '${OFFICIAL_ROW_NAME}' found — nothing to enhance. ` +
-        'Wrong preset id for --enhance-rows, or the dsh preset layout has drifted.'
+      `该 preset 中没有可改写为 presetRow 的官方行（判定：official dsh-tool-subagent 行 + provider: spawn ` +
+        `+ toolName 独立于 subagent/subagent_fork）。` +
+        `若源 preset 是 standard 类（只有通用/bridge 行），L2 不适用，请用默认 L1；` +
+        `若确有角色行，请检查行是否用了官方默认 toolName。` +
+        `(${AGENT_YML}: nothing to enhance for mode='l2'; source preset found no presetRow candidate rows)`
     )
   }
   let out = doc.toString({ lineWidth: 0 }) // no 80-col re-wrapping of untouched long lines
@@ -300,8 +352,13 @@ const USAGE = `Usage: preset-adapt.mjs [--dsh-home <dir>] [--source <preset-id>]
 Adapt a DSH agent preset for dsh-plugin-subagents (DESIGN §6.3).
   --dsh-home <dir>   DSH home (default: $DSH_HOME, then ~/.dsh)
   --source <id>      source preset id under <dsh-home>/.agent-presets (default: standard)
-  --enhance-rows     L2: rewrite official dsh-tool-subagent rows to this plugin
-                     (default L1: delete the generic subagent/subagent_fork rows)
+  --enhance-rows     L2: rewrite official dsh-tool-subagent rows with provider
+                     spawn + a distinct toolName to this plugin (presetRow:
+                     true); DELETE the generic subagent/subagent_fork rows,
+                     fork rows, and bridge template rows (they shadow or cannot
+                     mount as presetRow rows — the global instance's
+                     subagent/subagent_fork and subagent backend=<bridge> cover
+                     them). Default L1 deletes only the generic rows.
 
 The copy lands in <dsh-home>/.agent-presets/<source>-subagents; the source is
 never modified. Idempotent: a copy carrying the plugin marker is skipped.`
@@ -343,7 +400,7 @@ function main() {
     console.log(USAGE)
     return
   }
-  console.log(`[info] DSH_HOME = ${args.dshHome}`)
+  console.log('[info] DSH_HOME = ' + args.dshHome)
   try {
     const result = adaptPreset({ dshHome: args.dshHome, source: args.source, mode: args.mode })
     if (result.skipped) {
@@ -351,6 +408,20 @@ function main() {
         `[skip] ${result.targetDir} already adapted (source: ${result.marker.source}, mode: ${result.marker.mode}, ` +
           `adaptedAt: ${result.marker.adaptedAt}) — nothing to do.`
       )
+      // Idempotent skip: only a HINT when the source preset has changed since
+      // the copy was made (mtime of the source agent.cordis.yml is later than
+      // the marker's adaptedAt). Never re-adapt automatically — the copy stays
+      // untouched until the user asks.
+      const markerAdaptedTime = Date.parse(result.marker.adaptedAt)
+      const sourceYmlPath = path.join(args.dshHome, PRESET_DIR, args.source, AGENT_YML)
+      const sourceYmlMtime = fs.existsSync(sourceYmlPath) ? fs.statSync(sourceYmlPath).mtimeMs : -1
+      if (!Number.isNaN(markerAdaptedTime) && sourceYmlMtime > markerAdaptedTime) {
+        console.log(
+          `[note] the source preset changed since this copy was adapted (${AGENT_YML} mtime ${sourceYmlMtime} ` +
+            `> adaptedAt ${markerAdaptedTime}) — if you want the changes re-adapted, ` +
+            `delete ${result.targetDir} and re-run.`
+        )
+      }
       if (result.marker.mode !== args.mode) {
         console.log(
           `[note] existing copy was adapted with mode=${result.marker.mode}, not ${args.mode}. ` +
@@ -366,6 +437,13 @@ function main() {
       console.log(wording)
     } else {
       console.log(`[ok] L2: enhanced ${result.enhanced} row(s) -> name: '${PLUGIN_ROW_NAME}' + presetRow: true`)
+      if (result.removed > 0) {
+        console.log(
+          `[ok] L2: removed ${result.removed} row(s) that a presetRow cannot host or that would shadow the global tools`
+            + ' (generic subagent/subagent_fork rows, provider-fork rows, bridge template rows —'
+            + ' the global instance\'s subagent / subagent_fork / subagent backend=<bridge> cover them)'
+        )
+      }
     }
     console.log(`[ok] ${PRESET_YML} name -> '${result.presetName}'${result.presetYmlCreated ? ' (created)' : ''}`)
     console.log(`[ok] marker written: ${path.join(result.targetDir, MARKER_FILENAME)}`)

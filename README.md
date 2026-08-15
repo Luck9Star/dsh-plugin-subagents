@@ -104,9 +104,20 @@ Step notes:
   adapted preset in the UI and open a new session** (`recompose` only works on
   a blank session). `orchestrator`-type presets have no generic subagent rows
   and need no adaptation; they may instead opt into L2:
-  `./scripts/install-preset.sh <source> --enhance-rows` rewrites every
-  official subagent row to this plugin (`presetRow: true`), keeping the
-  per-row role/model pattern and gaining all per-call enhancements.
+  `./scripts/install-preset.sh <source> --enhance-rows` rewrites the official
+  rows a preset-row instance can host (`provider: spawn` + a `toolName` of
+  its own) to this plugin (`presetRow: true`), keeping the per-row role/model
+  pattern and gaining all per-call enhancements. The remaining official rows
+  are **deleted** from the copy instead of rewritten: generic
+  `subagent`/`subagent_fork` rows (they would shadow the global instance's
+  full-parameter tools), `provider: fork` rows (a preset-row instance
+  registers a spawn-semantics delegate — fork-style context-inheriting
+  delegation stays on the global `subagent_fork`), and bridge template rows
+  like `provider: codex` / `claude-code` (bridge delegation belongs to the
+  global `subagent` tool's `backend` parameter). Rewriting any of those would
+  either shadow the global tools or fail the plugin's own config validation
+  at mount time — and one bad row takes the whole preset down (the
+  2026-08-15 smoke incident; see docs/VERIFY.md).
 
 ### Local development install
 
@@ -252,7 +263,13 @@ config validates against the **official tool-row shape**: `provider`
 preset-row instance is native-only and stateless (providers, registry, and
 helper tools belong to the single global instance). The `toolName` must be
 distinct from the global instance's delegate/fork names and from other
-preset-row rows (e.g. `plan_agent`, `scout_agent`).
+preset-row rows (e.g. `plan_agent`, `scout_agent`). Accordingly, the L2
+adapter only rewrites `provider: spawn` rows with their own `toolName` and
+**deletes** the official rows it cannot host honestly (generic
+`subagent`/`subagent_fork` rows, `provider: fork` rows, bridge template rows)
+— an unrewritable row left behind would shadow the global tools, and a
+dishonest rewrite would fail this validation at mount time and take the whole
+preset down.
 
 ### Roles
 
