@@ -96,7 +96,8 @@ export function isGenericDelegationRow(row) {
   if (!isOfficialSubagentRow(row)) return false
   const config = row.get('config', true)
   if (!isMap(config)) return false
-  return GENERIC_TOOL_NAMES.includes(scalarString(config.get('toolName', true)))
+  const toolName = scalarString(config.get('toolName', true)) ?? 'subagent' // official default
+  return GENERIC_TOOL_NAMES.includes(toolName)
 }
 
 /**

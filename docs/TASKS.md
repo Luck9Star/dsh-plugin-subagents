@@ -151,7 +151,7 @@ P5 质量与发布    T19 T20 T21                  （依赖全部）
 ### T17 preset 适配脚本（L1/L2）
 - **目标**：web 形态 preset 遮蔽问题可脚本化解决（DESIGN §6.3，R5）。
 - **范围/文件**：`scripts/install-preset.sh|ps1`（双平台，补齐 legacy-cwd-plugin 缺失的 POSIX 版）：L1 默认复制源 preset → 删通用委派行（锚定 `name: '@deepseek-ai/dsh-tool-subagent'` + `toolName in {subagent, subagent_fork}`）→ 写副本标记；`--enhance-rows` L2：全部该 name 行改写 `name: 'dsh-plugin-subagents'` + `presetRow: true`；幂等（检测标记跳过）；锚失配 loud。
-  > **2026-08-15 修正**（真机冒烟事故后，详见 DESIGN §6.3-L2 与 VERIFY.md）：L2 改为**只改写 `provider: spawn` 且 `toolName` 独立命名的行**，通用行 / `provider: fork` 行 / bridge 模板行一律**删除** —— 「全部改写」会产出过不了本插件 config 校验的行（fork 行撞全局 `subagent_fork` 名），一行非法即整个 preset 挂载失败；回归硬闸门断言 L1/L2 产物每行过 validateConfig。
+  > **2026-08-15 修正**（真机冒烟事故后，详见 DESIGN §6.3-L2 与 VERIFY.md）：L2 改为**只改写 `provider: spawn` 且 `toolName` 独立命名的行**，通用行 / `provider: fork` 行 / bridge 模板行一律**删除** —— 「全部改写」会产出过不了本插件 config 校验的行（fork 行撞全局 `subagent_fork` 名），一行非法即整个 preset 挂载失败；回归硬闸门（SAMPLE_D fixture + validateConfig 闸门）断言 L1/L2 产物每行过 validateConfig。
 - **验收**：`test/preset-adapter.test.js`：对内嵌样例（standard 形态、orchestrator 形态）执行 L1/L2，断言产物 YAML 结构与幂等；不触碰源 preset（只读断言）。
 - **依赖**：T15。
 

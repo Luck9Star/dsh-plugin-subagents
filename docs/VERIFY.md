@@ -75,8 +75,9 @@
   目标 preset）直接创建会话 —— 挂载错误在该路径**不被吞**，`agent-preset-invalid` 与行号原文
   可完整捕获；配合会话持久化记录核对「会话创建时实际加载的 preset」即可区分「选择器写入失败」
   与「preset 挂载失败」两类症状。
-- **2026-08-15 冒烟报告 7 项 FAIL 归因修正**（报告本体：
-  `smoke-report-dsh-plugin-subagents-20260815.md`，只读参考）：
+- **2026-08-15 冒烟报告 7 项 FAIL 归因修正**（报告本体位于仓库外上级目录
+  `../smoke-report-dsh-plugin-subagents-20260815.md`，即
+  `/Users/yangyitian/Documents/dev/Agents/dsh/` 下，只读参考）：
   - C2/C3/D1/E1/E2（backend/role/cwd/model 参数被 schema 剥离）与 A2（presetRow 角色化工具缺席）
     = **环境面错配而非工具实现缺陷**：冒烟会话跑在 cordis 内置 preset 上，官方 3 参数 subagent
     遮蔽了插件全参数工具；preset 修复重挂载后即恢复，插件工具面无需改动。

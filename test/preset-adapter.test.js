@@ -98,6 +98,38 @@ description: 功能完整的编码 Agent。
 order: 1
 `
 
+// Sample A-nt: standard-shaped delegation rows where the official
+// dsh-tool-subagent row carries NO explicit `toolName` (so it must fall back
+// to the official default 'subagent' → a generic delegation row → an L1
+// delete target), alongside a role row with an explicit distinct toolName
+// (must NOT be deleted by L1) to confirm no collateral harm.
+const SAMPLE_A_NO_TOOLNAME = `# Sample std-a-nt: a missing toolName on an official row is the generic default.
+- id: persona
+  name: '@deepseek-ai/dsh-persona'
+  config:
+    text: >-
+      Sample persona for std-a-nt.
+
+- id: delegation
+  name: cordis:group
+  group: true
+  config:
+    # the official row with NO toolName — lib/config default is 'subagent'
+    - id: tool-subagent-defaulted
+      name: '@deepseek-ai/dsh-tool-subagent'
+      config:
+        provider: spawn
+        backgroundMode: continuable
+
+    # a role row with an explicit distinct toolName — L1 must keep it
+    - id: tool-subagent-plan
+      name: '@deepseek-ai/dsh-tool-subagent'
+      config:
+        provider: spawn
+        toolName: plan_agent
+        backgroundMode: continuable
+`
+
 // Sample B mirrors the user's `orchestrator` preset: role-specialized
 // dsh-tool-subagent rows (agentOptions / persona / toolFilter / maxDepth), no
 // generic rows at all.
@@ -322,6 +354,24 @@ test('L1 on standard shape removes exactly the two generic delegation rows', () 
   // cordis `!!js` tag round-trips verbatim (never resolved to a plain string)
   assert.ok(adapted.text.includes("disabled: !!js process.platform === 'win32'"))
   assert.ok(adapted.text.includes('# Product providers are host-plane singletons.'), 'comments survive')
+
+  // convergent: re-running L1 on the adapted text removes nothing more
+  const second = adaptAgentCordisYml(adapted.text, 'l1')
+  assert.equal(second.removed, 0)
+})
+
+test('L1 treats a missing toolName on an official row as the generic default and deletes it', () => {
+  const adapted = adaptAgentCordisYml(SAMPLE_A_NO_TOOLNAME, 'l1')
+  // the toolName-less official row must fall back to the official default
+  // 'subagent' → generic → deleted; the explicit plan_agent role row survives.
+  assert.equal(adapted.removed, 1)
+  assert.equal(adapted.enhanced, 0)
+
+  const rows = rowsOf(adapted.text)
+  const ids = rows.filter((r) => r.name === OFFICIAL_ROW_NAME).map((r) => r.id)
+  assert.deepEqual(ids, ['tool-subagent-plan'], 'only the toolName-less row is deleted')
+  const plan = rows.find((r) => r.id === 'tool-subagent-plan')
+  assert.equal(plan.config?.toolName, 'plan_agent')
 
   // convergent: re-running L1 on the adapted text removes nothing more
   const second = adaptAgentCordisYml(adapted.text, 'l1')
