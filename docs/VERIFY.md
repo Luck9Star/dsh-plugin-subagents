@@ -78,28 +78,30 @@
    progress 无 relayEpochSubmits/relayGuardFlag 键）。
 4. **开关回归（可选）**：`relayReportGuard: false` 时 guard 不注册
    （`subagent_progress` 仍带观测键）。
-5. **磁盘/registry 佐证**：registry 条目 `backend=codex` 的 remoteId 非空。
-6. **冷恢复两 epoch（评审追加）**：冷恢复（binding 已释放、registry 条目在）
+5. **冷恢复两 epoch（评审追加）**：冷恢复（binding 已释放、registry 条目在）
    的新 epoch 必须**重新归零**计数——否则前一个 epoch 的 submit 残留会让新
    epoch 的零转发自答 report 漏拒。两种可执行变体：
    - a) **idle 超时唤醒**：完成第 1 步后等待 idle 超时（profile 配置
      `idleTimeoutMs: 600000`，10 分钟），再 `send_message` 唤醒同一 bridge
      子代理、重发一次自指型探针（"Which product/CLI are you running as?
-     …"）。期望：新 epoch 内 report 先被拒（子代理日志出现 `Error: You are
-     a bridge relay: …`）或先出现 subagent_submit；`subagent_progress` 的
-     `relayEpochSubmits` 在新 epoch 开始时回到 0/1 而非延续旧值。
+     …"）。判据 = 新 epoch 内 report 先被拒（子代理日志出现
+     `Error: You are a bridge relay: …`）或先出现 subagent_submit，且最终
+     answer 干净（无 relay 自答冒充）；
    - b) **重启后恢复**：重启 dsh（web），`send_message` 唤醒 registry 记录的
      该子代理（registry 是唯一恢复源），重发自指型探针，判据同上（a）。
-   > 该场景已由 live-root probe 复证（2026-08-15，修复后）：真实
-   > `SubagentActivationSetupRegistry`（自 live root 逐字提取，锚点校验）+
-   > 本仓真实 `createBridgeState`/`attachBridgeLifecycle`/`attachRelayGuard`，
-   > 17 PASS / 0 FAIL —— 两 epoch 冷恢复场景中 epoch2 计数归零（binding ∪
-   > registry 并集）、零 submit report 被真实 registry 装配的 guard 拒绝
-   > （拒因原文输出）、补 submit 后放行；contribution 移除路径
+   > 该场景已由 live-root probe 复证（2026-08-15，修复后；脚本
+   > `/tmp/d2b-live-root-probe.mjs`，输出 `/tmp/d2b-live-root-probe.output.txt`，
+   > 22 PASS / 0 FAIL）：真实 `SubagentActivationSetupRegistry`（自 live
+   > root 逐字提取，锚点校验）+ 本仓真实
+   > `createBridgeState`/`attachBridgeLifecycle`/`attachRelayGuard`——两
+   > epoch 冷恢复场景中 epoch2 计数归零（binding ∪ registry 并集）、零
+   > submit report 被真实 registry 装配的 guard 拒绝（RELAY_GUARD_REASON
+   > 原文）、end 零-submit 告警触发、补 submit 后放行；installer 返回
+   > function disposer、调用后 guard 失效，contribution 移除路径
    > （releaseAll → installation.dispose()）不再抛
-   > "installation.dispose is not a function"，guard 注销干净（含
-   > undefined-returning installer 的灵敏度阴性对照）。probe 脚本为一次性
-   > /tmp 产物，未入仓。
+   > "installation.dispose is not a function"（含 undefined-returning
+   > installer 的灵敏度阴性对照）。probe 脚本为一次性 /tmp 产物，未入仓。
+6. **磁盘/registry 佐证**：registry 条目 `backend=codex` 的 remoteId 非空。
 
 ## C. 已知边界
 
@@ -203,6 +205,16 @@
   childCtx.tools.guard 拒绝零转发 epoch 的 report（lib/relay-guard.js）+ progress/wait 观测标记
   + relayReportGuard 开关；b) persona 硬化句（"NEVER answer from your own knowledge, identity,
   or runtime…"）。单测：test/relay-guard.test.js 等。
+- **【backlog · P3 —— ✅ 已修复】subagent 工具的 backend 参数描述文案 "(none detected on this deployment)" 与
+  enum 全量矛盾**——根因（调查钉死）：enum 与描述同数组同源，真机「矛盾」是 presetRow 行空 bridges 的
+  文案撒谎（部署明明检测到 bridge，只是本行不可用）。修复：描述三态 —— 非空 `join(' / ')` /
+  空且 presetRow → native-only 指引全局工具 / 空且全局实例 → 诚实 "not detected"（指向 subagent_agents）。
+  一致性不变式入测（test/subagent-tool.test.js：非空时描述逐一包含 enum.slice(1) 每个名字、
+  三态均不再出现 `none detected` 误导）。
+- **【backlog · P3 —— ✅ 已修复】subagent_progress 的 trace brief 占位符**：payload 缺 turn/step 时
+  ~~输出 "turn undefined start / step undefined.undefined"~~（lib/progress.js compactEvent）——
+  已改为省略编号（`turn start` / `turn end` / `step start`；编号齐全维持 `turn N start` / `step N.M`
+  原样，回归用例钉死）。
 - **INFO 备忘（设计现状，非缺陷）**：前台 bridge 调用不返回 childId、不进 list_agents —— 宿主侧
   取证需后台模式或磁盘工件。
 
