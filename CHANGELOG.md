@@ -14,6 +14,79 @@ takes over the official `subagent` / `subagent_fork` tool names.
 
 ### Added
 
+**Output redaction (task-weaver port)**
+
+- New `lib/redact.js`: five common secret shapes (Bearer headers, `sk-…`
+  keys, `gh?_…` PATs, `api_key=`/`access_token=`/`secret_key=` assignments,
+  JWTs) scrubbed to `[REDACTED:<kind>]` placeholders. Logic-equivalent port
+  of task-weaver `agent-runtime/src/redact.ts` (zero dependencies, pure
+  string ops; fresh RegExp per pass so `lastIndex` never leaks).
+- Applied at `lib/run.js`'s stdout/stderr capture boundary (task-weaver's
+  "redaction happens before the parser sink" invariant; `appendCapped`
+  8MB-tail semantics unchanged), at the ACP bridge's direct-stdio text
+  buffering (its capture bypasses run.js), and idempotently on every
+  bridge's final text (claude / codex / grok / acp).
+- New config key `redactSecrets` (boolean, **default `true`**, full schema
+  branch only — the presetRow branch rejects it per red line 9). `false`
+  restores byte-exact passthrough.
+- Known inherited trade-off (documented in lib/redact.js): a JSONL line whose
+  own fields look secret-shaped can be structurally corrupted by the
+  replacement and then fail to parse — dropped, never passed through raw
+  (fail closed). Prose false-positives of the shape `bearer <word>` are also
+  consumed (the upstream `/i` pattern includes the `Bearer ` prefix).
+
+**Grok native bridge**
+
+- New `lib/bridges/grok.js`: one `grok --single=<task> --output-format
+  streaming-json --permission-mode <mode>` process per turn through
+  `lib/run.js` (never child_process directly; Windows `.cmd` shims safe).
+  Flat-NDJSON event mapping ported from task-weaver
+  `adapters/grok/{argv,parse,classify}.ts` (TS Result → throw; exit 2 = clap
+  argument validation surfaced as a permanent-hint error; unknown non-zero
+  fails closed with the CLI's own output tail).
+- Session continuity: `-s <uuid>` preallocates the FIRST conversation
+  (claude-style, so an interrupted first turn still knows its id); the
+  terminal `end` event's `sessionId` is captured incrementally and later
+  turns resume via `-r/--resume <id>`.
+- Flag-injection guard (design rule 7's substance under grok 1.0.4's clap
+  constraints): the task rides as an ATTACHED value `--single=<task>` —
+  verified against the installed CLI that a `-`-prefixed task stays task
+  text and can never surface as a flag; model / session-id / effort values
+  pass the same identifier whitelist as the claude/codex bridges
+  (`safeFlagValue`).
+- Defense-in-depth: the resume/session/thread ids handed to separate flag or
+  sub-command values are whitelisted the same way across all bridges —
+  grok's `--resume` / `-s` (a stream-poisoned sessionId refuses loudly at
+  the next submission rather than riding in as a foreign flag), claude's
+  `--resume` / `--session-id`, and codex's `resume <thread_id>`. A stream
+  truncated before grok's terminal `end` event never promotes a resume id
+  (the fresh `-s` path survives instead of issuing a doomed `--resume`).
+- Verified deviations from task-weaver's recorded argv (grok CLI moved):
+  resume is `--resume <id>` alone (task-weaver recorded `-s <id> --resume
+  <id>`; in 1.0.4 `-s` only names a NEW session and needs `--fork-session`
+  to combine with `--resume`), and `grok -p -- <task>` is rejected by clap
+  ("a value is required for '--single'"), hence the attached-value transport.
+- Provider registration & naming ownership (design ruling 2026-08-16): the
+  native bridge is the built-in provider **`grok-native`** (`type: grok`,
+  PATH detection, `~/.grok/auth.json` file-artifact auth hint — the CLI is
+  never executed during detection; the auth probe covers the grok CLI
+  itself, shared by both transports). The bare name `grok` belongs to the
+  USER's `config.providers` (existing deployments define it as an ACP
+  transport, and durable registry entries under `backend: "grok"` hold
+  ACP-issued remote ids) — so a user-defined `grok` key is entirely
+  unaffected and wins by name, and `grok` / `grok-native` coexist for A/B.
+  No migration code and no resume-id heuristics (ACP ids and native session
+  ids cannot be reliably told apart — feeding an ACP remoteId to the native
+  bridge's `--resume` would be a permanent clap exit-2 error).
+- `permissionMode` mapping: `readonly → plan`, `full → bypassPermissions`,
+  `default → dontAsk` (grok's non-interactive headless mode; `default` would
+  wait on an approval no unattended turn can grant). UNKNOWN modes fail
+  closed to `plan` — grok's readonly equivalent (design rule 3).
+- New default role `grok-native-full` (backend grok-native, full, may
+  delegate), mirroring `codex-full`.
+- Bridge output passes through the redactor (`redactSecrets` switch shared
+  with the other bridges).
+
 **Unified tool surface**
 
 - `subagent` — single delegation entry taking over the official tool name:

@@ -675,7 +675,7 @@ dsh-plugin-subagents/
 4. bridge 契约固定：`create/submit/reconnect/dispose`；新增产品 = 新 bridge + provider 条目；纯 ACP CLI 零代码接入。
 5. 跨平台：所有 CLI 启动走 `lib/run.js`（Windows `.cmd` shim、`/d /s /c` 外层引号、`taskkill /T /F`）；路径 `join()`+`fileURLToPath`。
 6. registry 是唯一恢复源；`PRODUCT_SESSION:` marker 仅展示；恢复必须还原 settings（权限天花板）。
-7. 任务文本永远在 `--` 之后；flag/config 值白名单（`safeFlagValue`/`safeConfigValue`）。
+7. 任务文本永远在 `--` 之后；flag/config 值白名单（`safeFlagValue`/`safeConfigValue`）。**一处获准的字面形态例外**：grok 1.0.4 的 clap 解析器拒绝 `-p -- <task>`，grok bridge（`lib/bridges/grok.js`）以附值形态 `--single=<task>` 传输任务——`=` 之后整体为一个字面 prompt 值，解析器不会再解析为 flag（规则实质"转递内容永不可能翻转为 flag"得以保留；此为经文档化的传输决策，不是待修复的违规）。
 8. （新增）**能力不匹配永远 loud error，绝不静默忽略参数**（§3.5）。
 9. （新增）**Config 保持官方 `dsh-tool-subagent` 超集**，preset 行可无缝改写指向本包（§6.3-L2 的前提）。
 10. （新增）**共享状态单实例持有**：binding/registry/并发槽只存在于全局 apply() 实例；`presetRow` 实例无状态。

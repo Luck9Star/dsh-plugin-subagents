@@ -134,6 +134,26 @@ test('full branch: relayReportGuard accepts true/false; the presetRow branch rej
   assert.throws(() => validateConfig({ presetRow: true, provider: 'spawn', relayReportGuard: true }), /relayReportGuard/)
 })
 
+test('full branch: redactSecrets accepts true/false (absent = default ON); the presetRow branch rejects it (red line 9)', () => {
+  assert.equal(validateConfig({ redactSecrets: true }).redactSecrets, true)
+  assert.equal(validateConfig({ redactSecrets: false }).redactSecrets, false)
+  // absent → undefined at the schema layer; the default (true) is applied
+  // where the switch is consumed (buildProviders / run.js options), so an
+  // empty config equals redaction ON.
+  assert.equal(validateConfig({}).redactSecrets, undefined)
+  assert.throws(() => validateConfig({ redactSecrets: 'off' }), /redactSecrets/)
+  // the official preset-row shape never grows this key (a presetRow instance
+  // is native-only: no process capture, no bridge text surface)
+  assert.throws(() => validateConfig({ presetRow: true, provider: 'spawn', redactSecrets: false }), /redactSecrets/)
+})
+
+test('full branch: providers type accepts the grok native bridge', () => {
+  const cfg = validateConfig({ providers: { mygrok: { type: 'grok', command: 'grok' } } })
+  assert.equal(cfg.providers.mygrok.type, 'grok')
+  // the enum stays closed — unknown types still fail loudly
+  assert.throws(() => validateConfig({ providers: { x: { type: 'grokk' } } }), /type/)
+})
+
 test('presetRow branch: official row shape passes with toolName defaulting to subagent', () => {
   const cfg = validateConfig({ presetRow: true, provider: 'spawn' })
   assert.equal(cfg.presetRow, true)

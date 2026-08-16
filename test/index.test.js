@@ -108,9 +108,12 @@ function fakeCtx({ registered = ['spawn', 'fork'], toolHost } = {}) {
 }
 
 /**
- * Deterministic bridge config: codex shimmed (detected), claude-code/acp
- * overridden to absent paths. The registry target defaults into tmp too —
- * no test ever touches the real ~/.dsh.
+ * Deterministic bridge config: codex shimmed (detected), claude-code/acp/
+ * grok-native overridden to absent paths (grok-native is a built-in whose
+ * default command is the bare `grok` — sealing it keeps the test independent
+ * of whether the host really has `grok` on PATH; the bare `grok` name is the
+ * USER's config key, deliberately absent here). The registry target defaults
+ * into tmp too — no test ever touches the real ~/.dsh.
  */
 function shimmedConfig(dir, extra = {}) {
   return {
@@ -118,6 +121,7 @@ function shimmedConfig(dir, extra = {}) {
       codex: { type: 'codex', command: join(dir, 'codex-cli') },
       'claude-code': { type: 'claude', command: join(dir, 'claude-cli') },
       acp: { command: join(dir, 'opencode-cli') },
+      'grok-native': { type: 'grok', command: join(dir, 'grok-cli') },
     },
     registryPath: join(dir, 'registry', 'subagents-registry.json'),
     ...extra,

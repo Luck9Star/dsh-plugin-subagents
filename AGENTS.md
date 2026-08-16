@@ -9,9 +9,11 @@ working in this repository.
 unifies two subagent backends behind one tool family taking over the official
 `subagent` / `subagent_fork` names: **native** in-process subagents with
 per-call overrides (including `cwd` via two distributed patches), and
-**bridge** subagents over external agent CLIs (Claude Code, Codex, any ACP
-agent) with a declarative role library, a delegation permission ceiling, and
-durable session recovery. It fully replaces `legacy-cwd-plugin` and
+**bridge** subagents over external agent CLIs (Claude Code, Codex, the
+grok-native streaming-json bridge, any ACP agent) with a declarative role
+library, a delegation permission ceiling, and durable session recovery. The
+bare `grok` name belongs to the user's `config.providers` (see
+`lib/providers.js` NAMING OWNERSHIP). It fully replaces `legacy-cwd-plugin` and
 `legacy-bridges-plugin`; the design record is
 [docs/DESIGN.md](docs/DESIGN.md) and the task breakdown is
 [docs/TASKS.md](docs/TASKS.md).
@@ -40,7 +42,7 @@ lib/
   drivers/            # SubagentDriver contract + native/bridge drivers + assembly
   native-delegate.js  # pure functions migrated from legacy-cwd-plugin
   tools/              # one module per model-facing tool (subagent*, legacy alias)
-  bridges/            # one bridge per product protocol (claude / codex / acp)
+  bridges/            # one bridge per product protocol (claude / codex / grok / acp)
   providers.js        # config-driven provider registry (+ custom ACP agents)
   roles.js            # role library loader (backend + overrides)
   ceiling.js          # permission rank + delegation ceiling check
@@ -48,8 +50,9 @@ lib/
   bindings.js         # child→remote bindings + display-only log markers
   availability.js     # CLI detection (never executes the CLIs)
   run.js              # cross-platform process launching (Windows .cmd shims)
+  redact.js           # secret redaction at the capture boundary (task-weaver port)
   progress.js         # session-log folding (progress/trace/token usage)
-roles/                # declarative role files (*.json), six defaults
+roles/                # declarative role files (*.json), seven defaults
 patches/              # two cwd patches + install/verify/uninstall (sh + ps1) + probe
 scripts/              # install-preset L1/L2 (sh + ps1), lint, link-harness-dsh-tools
 test/                 # node:test suite (fakes only)
@@ -82,7 +85,13 @@ binding (DESIGN §9):
    (the permission ceiling).
 7. **Task text always goes after `--`**, and flag/config values are
    whitelisted (`safeFlagValue` / `safeConfigValue`) — relayed content can
-   never inject product CLI flags.
+   never inject product CLI flags. One sanctioned exception to the LITERAL
+   form: grok 1.0.4's clap parser rejects `-p -- <task>`, so the grok bridge
+   (`lib/bridges/grok.js`) carries the task as an ATTACHED value
+   `--single=<task>` — everything after `=` is one literal prompt value the
+   parser never re-parses as flags. That preserves the rule's SUBSTANCE
+   (relayed content can never flip into a flag); it is a deliberate,
+   documented transport decision, not a violation to "fix".
 8. **Capability mismatches are always loud errors; parameters are never
    silently ignored** (the parameter-capability matrix, DESIGN §3.5).
 9. **Config stays a superset of the official `dsh-tool-subagent` row**, so a
@@ -109,7 +118,8 @@ branches: the full plugin schema (`toolNames`, `register`, `presetRow`,
 native defaults `provider` / `enableRunInBackground` / `backgroundMode` /
 `agentOptions` / `persona` / `toolFilter` / `maxDepth` / `presetHints` /
 `fork`, bridge keys `providers` / `registryPath` / `idleTimeoutMs` /
-`maxConcurrentChildren` / `rolesDir`, and `legacyProductAliases`) and, when
+`maxConcurrentChildren` / `rolesDir`, the bridge-side switches
+`relayReportGuard` / `redactSecrets`, and `legacyProductAliases`) and, when
 `presetRow: true`, the official tool-row shape (`provider` required,
 `toolName` default `subagent`, shared native fields only). Roles live in
 `roles/*.json` (`backend`, `permissionMode`, `allowDelegation`,

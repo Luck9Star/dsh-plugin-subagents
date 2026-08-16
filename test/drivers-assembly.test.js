@@ -66,8 +66,12 @@ function fakeCtx({ registered = ['spawn', 'fork'] } = {}) {
 /**
  * Deterministic config: every provider's command is an absolute path under
  * `dir`, so availability depends only on whether the shim file was written
- * (never on the ambient host PATH). Shimmed: grok-cli, codex-cli. Absent:
- * claude-cli (override built-in claude-code), opencode-cli (override `acp`).
+ * (never on the ambient host PATH). Shimmed: grok-cli (the USER key `grok`,
+ * ACP transport — mirrors the real deployment), codex-cli. Absent:
+ * claude-cli (override built-in claude-code), opencode-cli (override `acp`),
+ * grok-native-cli (override built-in grok-native whose default command is
+ * the bare `grok` — sealed so a host with grok installed cannot skew the
+ * fixture).
  */
 function configWithShims(dir) {
   return {
@@ -78,6 +82,7 @@ function configWithShims(dir) {
       codex: { type: 'codex', command: join(dir, 'codex-cli') },
       'claude-code': { type: 'claude', command: join(dir, 'claude-cli') },
       acp: { command: join(dir, 'opencode-cli') },
+      'grok-native': { type: 'grok', command: join(dir, 'grok-native-cli') },
     },
   }
 }

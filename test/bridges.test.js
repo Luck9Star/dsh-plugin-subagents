@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { createClaudeBridge, safeFlagValue } from '../lib/bridges/claude.js'
 import { createCodexBridge, safeConfigValue } from '../lib/bridges/codex.js'
 import { createAcpBridge } from '../lib/bridges/acp.js'
+import { createGrokBridge } from '../lib/bridges/grok.js'
 
 /**
  * The bridge contract: every bridge exposes create / submit / reconnect /
@@ -20,7 +21,7 @@ function fakeBridge() {
 }
 
 test('real bridges expose the contract', () => {
-  for (const bridge of [createClaudeBridge(), createCodexBridge(), createAcpBridge()]) {
+  for (const bridge of [createClaudeBridge(), createCodexBridge(), createAcpBridge(), createGrokBridge()]) {
     assert.equal(typeof bridge.create, 'function')
     assert.equal(typeof bridge.submit, 'function')
     assert.equal(typeof bridge.reconnect, 'function')
@@ -68,4 +69,31 @@ test('claude bridge preallocates a pending session id (no disk guessing)', async
   const remote = await bridge.create()
   assert.match(remote.pendingSessionId, /^[0-9a-f-]{36}$/, 'UUID preallocated for --session-id')
   assert.equal(remote.sessionId, undefined)
+})
+
+test('NIT-4: a poisoned sessionId / threadId through reconnect is refused loudly at arg-build', async () => {
+  // A session/thread id captured from a hostile stream must be whitelisted
+  // before it rides a SEPARATE argv element (`--resume <id>` / `resume
+  // <threadId>`) — a flag-shaped id could otherwise flip into another CLI
+  // flag. safeFlagValue / safeConfigValue throw BEFORE any process spawns, so
+  // a definitely-not-installed `command` keeps this deterministic: a whitelist
+  // regression would attempt (and fail loudly on) that spawn, not silently hit
+  // a real installed `claude`/`codex` on the CI machine.
+  const NOT_INSTALLED = 'definitely-not-installed-cli'
+  for (const [bridge, evil, what] of [
+    [createClaudeBridge({ command: NOT_INSTALLED }), '--dangerously-skip-permissions', 'sessionId'],
+    [createCodexBridge({ command: NOT_INSTALLED }), '--dangerously-bypass-approvals-and-sandbox', 'threadId'],
+  ]) {
+    const remote = await bridge.reconnect(evil)
+    await assert.rejects(
+      () => bridge.submit(remote, 'task'),
+      (error) => {
+        assert.match(error.message, new RegExp(`unsafe ${what}`))
+        return true
+      },
+    )
+  }
+  // valid UUID-ish ids pass the whitelist and are the ids the bridges emit
+  assert.equal(safeFlagValue('22222222-3333-4444-5555-666666666666', 'sessionId'), '22222222-3333-4444-5555-666666666666')
+  assert.equal(safeConfigValue('thread-1', 'threadId'), 'thread-1')
 })

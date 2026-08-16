@@ -60,11 +60,18 @@ test('detectAvailability: providers without a command are unregistered', async (
 test('authChecks: acp always ok; others inspect their home-dir login artifacts', () => {
   const acp = authChecks.acp()
   assert.equal(acp.ok, true)
-  // claude-code and codex reflect whatever artifacts exist in this home
+  // claude-code, codex and grok reflect whatever artifacts exist in this home
   const claude = authChecks['claude-code']()
   assert.equal(typeof claude.ok, 'boolean')
   assert.equal(typeof claude.note, 'string')
   const codex = authChecks.codex()
   assert.equal(typeof codex.ok, 'boolean')
   assert.equal(typeof codex.note, 'string')
+  const grok = authChecks.grok()
+  assert.equal(typeof grok.ok, 'boolean')
+  assert.equal(typeof grok.note, 'string')
+  // either outcome names the artifact path or the remedy (file probe only —
+  // the CLI itself is never executed; which branch fires depends on this
+  // machine's ~/.grok, both are valid)
+  assert.match(grok.note, /auth\.json/)
 })

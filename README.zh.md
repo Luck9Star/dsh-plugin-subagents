@@ -2,13 +2,14 @@
 
 [English](README.md) | **简体中文**
 
-DeepSeek Harness 的统一子代理插件：一套 `subagent*` 工具族覆盖两类后端 —— **原生进程内子代理**（支持含 `cwd` 在内的逐次调用覆盖）与**外部 Agent CLI**（Claude Code、Codex、任意 ACP agent，作为持久、可续聊的 bridge 子代理）。插件接管官方 `subagent` / `subagent_fork` 工具名，模型习惯零迁移；**完全取代** `legacy-cwd-plugin` 与 `legacy-bridges-plugin`（见[互斥](#互斥二选一)）。
+DeepSeek Harness 的统一子代理插件：一套 `subagent*` 工具族覆盖两类后端 —— **原生进程内子代理**（支持含 `cwd` 在内的逐次调用覆盖）与**外部 Agent CLI**（Claude Code、Codex、Grok、任意 ACP agent，作为持久、可续聊的 bridge 子代理）。插件接管官方 `subagent` / `subagent_fork` 工具名，模型习惯零迁移；**完全取代** `legacy-cwd-plugin` 与 `legacy-bridges-plugin`（见[互斥](#互斥二选一)）。
 
 ## 功能
 
 - **一套工具面、两类后端** —— `subagent` 默认委派给原生进程内子代理；`backend` 参数（或角色）切换到外部 Agent CLI。能力不匹配永远大声报错，绝不静默忽略不支持的参数。
 - **原生逐次调用覆盖** —— `model`（裸 id 或 `provider/model` 组合）、`provider`、`persona`（含 `@preset:` 引用）、`toolFilter`，以及逐次调用的 `cwd`（由本仓库安装脚本分发的两枚最小补丁提供）。
-- **CLI bridges** —— Claude Code（`--session-id` / `--resume`）、Codex（JSONL 线程捕获、`resume`）与通用 ACP 桥（持久进程、`session/load` 重连、厂商通知吸收）。任意 ACP CLI 经 `config.providers` 零代码接入。
+- **CLI bridges** —— Claude Code（`--session-id` / `--resume`）、Codex（JSONL 线程捕获、`resume`）、Grok（内置 id **`grok-native`** 的原生 streaming-json 桥：每 turn 一次 `grok --single=<task>` 进程、会话 id 从终止 `end` 事件增量捕获、`--resume <id>` 续接）与通用 ACP 桥（持久进程、`session/load` 重连、厂商通知吸收）。任意 ACP CLI 经 `config.providers` 零代码接入。裸名 `grok` 归你的 `config.providers` 所有（既有部署即 ACP 传输）—— `grok-native` 与用户定义的 `grok` provider 并存。
+- **bridge 输出默认脱敏** —— 常见秘密形态（`Bearer …`、`sk-…` 密钥、`gh?_…` PAT、`api_key=…` 赋值、JWT）在捕获 CLI stdout/stderr 时与各 bridge 返回给模型的最终文本处一律洗掉（移植自 task-weaver 的脱敏器），默认开启：产品 CLI 打印出的秘密永远进不了对话上下文。开关：`redactSecrets`（默认 `true`）。
 - **带权限天花板的角色库** —— 声明式角色锁定后端、远端权限档、附加指令与 native overrides。委派树上 `readonly < default < full` 不可上调；未知的存量权限档一律按 `readonly` 从严（fail closed）。
 - **relay 回合闭环校验（D2b）** —— bridge relay 子代理本回合还没经 `subagent_submit` 转发就想 `report` 自答时，该 report 调用被拒绝并返回纠正性错误（模型仍可转发后再 report）；relay persona 附带同款硬化句，`subagent_progress` / `subagent_wait` 透出零转发的 epoch（`relayEpochSubmits`、`relayGuardFlag`、answer 前缀标记）—— 自答的 relay 再也无法静默冒充远端产品。开关：`relayReportGuard`（默认 `true`）。
 - **durable 恢复** —— bridge 子代理在空闲释放与重启后仍可恢复（持久注册表：0600 属主原子写、500 条上限）；native 子代理随 harness 会话持久化。前身 `legacy-bridges-plugin` 的注册表首载时一次性迁移，旧 relay 子代理可经 `product_submit` / `product_delegate` 别名继续使用。
@@ -18,7 +19,7 @@ DeepSeek Harness 的统一子代理插件：一套 `subagent*` 工具族覆盖�
 
 - DeepSeek Harness `0.1.0-rc.6`（`peerDependencies` 锁定 `^0.1.0-rc.6` 版本族）。
 - Node ≥ 18。
-- 仅 bridge 后端需要：至少一个 CLI 在 `PATH` 上且已登录 —— `claude`、`codex` 或任意 ACP CLI。纯 native 部署一个都不需要。
+- 仅 bridge 后端需要：至少一个 CLI 在 `PATH` 上且已登录 —— `claude`、`codex`、`grok` 或任意 ACP CLI。纯 native 部署一个都不需要。
 
 ## 安装
 
@@ -85,7 +86,7 @@ dsh plugin --profile web add "$(pwd)"
 |---|---|---|
 | `legacy-cwd-plugin` | 同为接管官方名的 bundle | 双方都在全局工具层注册 `subagent` → 工具重名注册错误，进程起不来 |
 | `dsh-subagent-tools` | 同为接管官方名的 bundle | 工具重名注册错误（`subagent`），fail loud |
-| `legacy-bridges-plugin`（本插件前身） | bridge provider 名重复 | `registerProvider('codex' / 'claude-code' / 'acp')` 重名错误，进程起不来；旧 `product_*` 工具也会并存 |
+| `legacy-bridges-plugin`（本插件前身） | bridge provider 名重复 | `registerProvider('codex' / 'claude-code' / 'grok-native' / 'acp')` 重名错误，进程起不来；旧 `product_*` 工具也会并存 |
 
 安装本插件前先卸载 / 停用另一边（安装流程第 2 步）。前身的 durable relay 子代理会被一次性迁移，并可通过 legacy 别名（`legacyProductAliases`，默认 `auto`）继续运行。
 
@@ -109,7 +110,7 @@ dsh plugin --profile web add "$(pwd)"
 |---|---|---|
 | `description` | 全部（必填） | 3–5 词展示标签 |
 | `prompt` | 全部（必填） | 完整自包含的任务文本 |
-| `backend` | — | `native`（默认）或某个检测到的 bridge provider（codex / claude-code / 配置的 ACP agent） |
+| `backend` | — | `native`（默认）或某个检测到的 bridge provider（codex / claude-code / grok-native / 用户定义的 `grok` ACP 条目 / 配置的 ACP agent） |
 | `role` | 全部 | 角色 id（`subagent_roles` 可列出）；省略 → `general`；须与角色锁定的 backend 一致 |
 | `model` | native + bridge | native：裸 id（`k3`）或 `provider/model` 组合；bridge：产品自己的模型 id |
 | `persona` | 仅 native | 逐次调用的 persona 文本或 `@preset:<id>` 引用 |
@@ -156,11 +157,12 @@ bridge（自前身全量保留）：
 
 | 键 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
-| `providers` | record | — | 新增 / 覆盖 provider：`{ type?: 'claude' \| 'codex' \| 'acp', command?, args?, env?, timeoutMs? }`；任意 ACP CLI 零代码接入 |
+| `providers` | record | — | 新增 / 覆盖 provider：`{ type?: 'claude' \| 'codex' \| 'grok' \| 'acp', command?, args?, env?, timeoutMs? }`；任意 ACP CLI 零代码接入。裸名 `grok` 是**用户**的键（既有部署即 ACP 传输，且 `~/.dsh/subagents-registry.json` 存有 `backend: "grok"` 的持久会话）—— 用户自定义的 `grok` 条目完全不受影响、按名优先；原生协议桥以独立内置 `grok-native` 注册，`grok` 与 `grok-native` 可并存 A/B。零迁移、零 resume-id 启发式（ACP remoteId 喂给原生 `--resume` 会得到 clap exit-2 永久错误） |
 | `registryPath` | string | `~/.dsh/subagents-registry.json` | 持久注册表路径 |
 | `idleTimeoutMs` | ≥ 0 整数 | `600000` | 结算后的 bridge 子代理闲置多久释放远端会话（`0` 禁用） |
 | `maxConcurrentChildren` | 正整数 | `8` | 正有一轮任务在跑的 bridge 可续续子代理上限（native 后台走 harness jobs，不占名额） |
 | `relayReportGuard` | boolean | `true` | D2b 回合闭环校验：relay 子代理本回合未调 `subagent_submit` 就 report 时拒绝该调用（模型收到纠正性错误后仍可转发再 report）；`false` 恢复不校验的旧行为 |
+| `redactSecrets` | boolean | `true` | 对捕获的 CLI stdout/stderr 与各 bridge 返回的最终文本脱敏（Bearer token、`sk-` 密钥、GitHub PAT、`api_key=` 赋值、JWT 五种形态）；`false` 恢复字节精确透传，供确有需要的部署使用 |
 | `rolesDir` | string | 包内 `roles/` | 角色库目录 |
 
 迁移：
@@ -203,6 +205,7 @@ bridge（自前身全量保留）：
 | `debug` | native | — | true | 允许再派一层只读助手 |
 | `codex-full` | codex | full | true | bridge 示例：全权 codex |
 | `claude-readonly` | claude-code | readonly | false | bridge 示例：plan 模式审查 |
+| `grok-native-full` | grok-native | full | true | bridge 示例：全权 grok（原生 streaming-json 桥） |
 
 ## 升级 dsh / npx 缓存漂移
 
@@ -229,6 +232,8 @@ bridge（自前身全量保留）：
 - **`SubagentDriver` 抽象。** 两类后端实现同一个 driver 接口；所有差异都显式化为能力标志（`cwd`、`persona`、`toolFilter`、`llmRoute`、`maxDepth`、`permissionMode`、`reasoningEffort`、`continuable`、`backgroundJob`、`durableResume`、`promptInjectionGuard`）。native 覆盖前一组；bridge 覆盖 `permissionMode` / `reasoningEffort` / `continuable` / `durableResume` / `promptInjectionGuard`。工具层按矩阵校验参数，不匹配即大声 throw —— 绝不静默降级。生命周期词汇复用 harness seam（`subagent/start|end` 事件、`stopReason` 词表、`AbortError` / `TimeoutError`）。
 - **cwd 补丁为什么存在。** rc.6 的 `SubagentStartRequest` 没有逐次调用的 `cwd` 字段 —— 而逐次调用的 `model` / `provider` / `persona` / `toolFilter` 都是原生 request 字段、无需补丁。只有 `cwd` 需要帮助：恰好两枚最小锚定补丁，各打一个建子路径的合并点（one-shot 驱动独立包 `dsh-subagent-in-process-driver`，与 `dsh-subagent` bundle 内联的 continuable 管理器）。安装器对每枚补丁跑四态状态机 —— applied / 幂等 / `native-verified` / 大声漂移 —— 其中「dsh 已原生支持」只能经**硬双闸**记入：人工核实的版本白名单（rc.6 初始为空）AND 经 live 子代理路径实测子会话 `meta.cwd` 的行为探针。两闸缺一不可；任一失败都大声报错（d1 锚失配漂移 → 需新版本插件；d2 白名单未证实 → `verify --probe`）。正是这道闸让「cwd 静默失效」永远不会被误判成原生支持。
 - **`dsh-subagent` 导入是纯函数白名单。** 运行时存在两份 `@deepseek-ai/dsh-subagent` 实体副本（harness 的与本仓库 peer 安装的）。本插件只从自己的副本导入纯函数（`assertSubagentMaxDepth`、`settleRun`）—— 无模块态、无 Symbol 身份 —— 一切服务访问走 `ctx`。该副本**有意不**符号链接到 live 根：过期的实体副本照样给出正确的纯函数，而 npx 换 hash 后悬空的链接会让整个插件加载失败（我们已知的最脆失效模式）。`npm run lint` 强制执行该白名单。
+- **脱敏默认开在捕获边界。** 脱敏器（移植自 task-weaver `redact.ts`）在 CLI stdout/stderr 被捕获的那一刻（`lib/run.js`）与 ACP 桥直连 stdio 的文本进入缓冲处洗掉五种常见秘密形态，另对每个 bridge 返回的最终文本做幂等兜底。任务文本**入向不脱敏** —— 只洗回来的输出。被脱敏后不再能解析为 JSONL 的行会被丢弃、绝不原文透传（fail closed）。`redactSecrets: false` 恢复字节精确输出。
+- **grok 桥在无字面 `--` 的情况下防住 flag 注入。** grok 1.0.4 的 clap 解析器拒绝 `-p -- <task>`，因此任务文本以**附值**形态传输：`--single=<task>` —— `=` 之后的一切是一个字面 prompt 值，解析器永不把它重析为 flag（已对本机安装的 CLI 实测：以 `-` 开头的任务仍是任务文本）。这在 grok 自身解析器约束下保住了设计规则 7 的实质（规则 7 字面形态的唯一获准例外，已在 AGENTS.md 注明）；所有真正的 flag 值（model、sessionId 等）仍经与 claude/codex 桥相同的标识符白名单。该桥以内置 **`grok-native`** 注册 —— 裸名 `grok` 归用户 `config.providers` 所有（既有部署即 ACP 传输，其持久注册表会话继续原样工作）。
 - **共享状态单实例持有。** binding、注册表与并发槽只存在于唯一的全局 `apply()` 实例；`presetRow` 实例无状态，因此 preset 行改写与全局实例可以安全并存。
 
 ## 开发

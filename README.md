@@ -5,10 +5,10 @@
 The unified subagent plugin for the DeepSeek Harness: one `subagent*` tool
 family over two backends — **native in-process subagents** with per-call
 overrides (including `cwd`), and **external agent CLIs** (Claude Code, Codex,
-any ACP agent) as durable, continuable bridge subagents. It takes over the
-official `subagent` / `subagent_fork` tool names, so model habits carry over
-with zero migration, and it **fully replaces** both `legacy-cwd-plugin` and
-`legacy-bridges-plugin` (see [Mutual exclusion](#mutual-exclusion-choose-one)).
+Grok, any ACP agent) as durable, continuable bridge subagents. It takes over
+the official `subagent` / `subagent_fork` tool names, so model habits carry
+over with zero migration, and it **fully replaces** both `legacy-cwd-plugin`
+and `legacy-bridges-plugin` (see [Mutual exclusion](#mutual-exclusion-choose-one)).
 
 ## Features
 
@@ -21,9 +21,20 @@ with zero migration, and it **fully replaces** both `legacy-cwd-plugin` and
   `toolFilter`, and per-call `cwd` (distributed as two minimal patches by this
   repo's installer).
 - **CLI bridges** — Claude Code (`--session-id` / `--resume`), Codex (JSONL
-  thread capture, `resume`), and a generic ACP bridge (persistent process,
-  `session/load` reconnect, vendor-notification absorption). Any ACP CLI joins
-  through `config.providers` with zero code.
+  thread capture, `resume`), Grok (native streaming-json bridge under the
+  built-in id `grok-native`: one `grok --single=<task>` process per turn,
+  session id captured from the terminal `end` event, resumed via
+  `--resume <id>`), and a generic ACP bridge (persistent process,
+  `session/load` reconnect, vendor-notification absorption). Any ACP CLI
+  joins through `config.providers` with zero code. The bare name `grok`
+  belongs to your `config.providers` (an ACP transport on existing
+  deployments) — `grok-native` and a user-defined `grok` provider coexist.
+- **Secret redaction on every bridge output** — common secret shapes
+  (`Bearer …`, `sk-…` keys, `gh?_…` PATs, `api_key=…` assignments, JWTs) are
+  scrubbed from captured CLI stdout/stderr and from the final text every
+  bridge returns to the model, by default (ported from task-weaver's
+  redactor). A secret a product CLI prints can never leak into the
+  conversation context. Switch: `redactSecrets` (default `true`).
 - **Role library with a permission ceiling** — declarative roles pin a
   backend, the remote permission mode, extra instructions, and native
   overrides. `readonly < default < full` can never be raised down the
@@ -53,7 +64,8 @@ with zero migration, and it **fully replaces** both `legacy-cwd-plugin` and
   `^0.1.0-rc.6` family).
 - Node ≥ 18.
 - For bridge backends only: at least one CLI on `PATH` and authenticated —
-  `claude`, `codex`, or any ACP CLI. Native-only deployments need none.
+  `claude`, `codex`, `grok`, or any ACP CLI. Native-only deployments need
+  none.
 
 ## Install
 
@@ -167,7 +179,7 @@ packages. The failure is loud **by design** — enforced mutual exclusion:
 |---|---|---|
 | `legacy-cwd-plugin` | same official-name takeover bundle | both register `subagent` in the global tool layer → duplicate tool registration error, process fails to start |
 | `dsh-subagent-tools` | same official-name takeover bundle | duplicate tool registration error (`subagent`), fail loud |
-| `legacy-bridges-plugin` (this plugin's predecessor) | duplicate bridge provider names | `registerProvider('codex' / 'claude-code' / 'acp')` duplicate error, process fails to start; the old `product_*` tools would also coexist |
+| `legacy-bridges-plugin` (this plugin's predecessor) | duplicate bridge provider names | `registerProvider('codex' / 'claude-code' / 'grok-native' / 'acp')` duplicate error, process fails to start; the old `product_*` tools would also coexist |
 
 Uninstall / disable the other side before installing this plugin (step 2 of
 the install flow). Durable relay children from the predecessor are migrated
@@ -196,7 +208,7 @@ over — they keep working for both native and relay children.
 |---|---|---|
 | `description` | all (required) | 3–5 word display label |
 | `prompt` | all (required) | fully self-contained task |
-| `backend` | — | `native` (default) or a detected bridge provider (codex / claude-code / configured ACP agents) |
+| `backend` | — | `native` (default) or a detected bridge provider (codex / claude-code / grok-native / a user-defined `grok` ACP entry / configured ACP agents) |
 | `role` | all | role id (`subagent_roles` lists them); omitted → `general`; must agree with the role's pinned backend |
 | `model` | native + bridge | native: bare id (`k3`) or `provider/model` composite; bridge: the product's own model id |
 | `persona` | native only | per-call persona text or `@preset:<id>` reference |
@@ -249,11 +261,12 @@ Bridge (inherited from the predecessor in full):
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `providers` | record | — | extra / override providers `{ type?: 'claude' \| 'codex' \| 'acp', command?, args?, env?, timeoutMs? }`; any ACP CLI joins with zero code |
+| `providers` | record | — | extra / override providers `{ type?: 'claude' \| 'codex' \| 'grok' \| 'acp', command?, args?, env?, timeoutMs? }`; any ACP CLI joins with zero code. The bare name `grok` is the USER's key (an ACP transport on existing deployments, with durable registry entries under `backend: "grok"`) — a user-defined `grok` entry is entirely unaffected and wins by name; the native protocol bridge registers as the separate built-in `grok-native`, so `grok` and `grok-native` coexist for A/B. No migration, no resume-id heuristics (an ACP remoteId fed to the native `--resume` would be a permanent clap exit-2 error) |
 | `registryPath` | string | `~/.dsh/subagents-registry.json` | durable registry location |
 | `idleTimeoutMs` | integer ≥ 0 | `600000` | idle window before a settled bridge child's remote session is released (`0` disables) |
 | `maxConcurrentChildren` | positive integer | `8` | cap on bridge continuable children with a turn in flight (native background runs go through harness jobs and are not counted) |
 | `relayReportGuard` | boolean | `true` | D2b turn-closure guard: reject a bridge relay's `report` call when the current turn has no `subagent_submit` call (the relay model then gets a corrective error and can forward + report). `false` restores the unguarded behavior |
+| `redactSecrets` | boolean | `true` | scrub common secret shapes (Bearer tokens, `sk-` keys, GitHub PATs, `api_key=` assignments, JWTs) from captured CLI stdout/stderr and from every bridge's final text. `false` restores byte-exact passthrough for deployments that need it |
 | `rolesDir` | string | the package's `roles/` | role library directory |
 
 Migration:
@@ -312,6 +325,7 @@ Default role set:
 | `debug` | native | — | true | may delegate one more read-only helper layer |
 | `codex-full` | codex | full | true | bridge example: full-permission codex |
 | `claude-readonly` | claude-code | readonly | false | bridge example: plan-mode review |
+| `grok-native-full` | grok-native | full | true | bridge example: full-permission grok (native streaming-json bridge) |
 
 ## Upgrading dsh / npx cache drift
 
@@ -378,6 +392,26 @@ Full detail in [docs/DESIGN.md](docs/DESIGN.md); the short version:
   correct pure functions, whereas a symlink dangling after an npx hash switch
   would kill the whole plugin load (the most fragile failure mode we know).
   `npm run lint` enforces the whitelist.
+- **Secret redaction is default-on at the capture boundary.** The redactor
+  (ported from task-weaver's `redact.ts`) scrubs five common secret shapes
+  from CLI stdout/stderr the moment they are captured (`lib/run.js`) and from
+  the ACP bridge's direct stdio text, plus the final text each bridge returns
+  (belt-and-braces; the pass is idempotent). The task text itself is NOT
+  redacted on the way in — only outputs coming back. A redacted line that no
+  longer parses as JSONL is dropped, never passed through raw (fail closed).
+  `redactSecrets: false` restores byte-exact output.
+- **The grok bridge keeps flag injection out without a literal `--`.** grok
+  1.0.4's clap parser refuses `-p -- <task>`, so the task rides as an
+  ATTACHED value, `--single=<task>`: everything after `=` is one literal
+  prompt value the parser never re-parses as flags (verified against the
+  installed CLI: a task starting with `-` stays task text). This preserves
+  the substance of design rule 7 under grok's own parser constraints (the
+  one sanctioned exception to rule 7's literal form, annotated in
+  AGENTS.md); every actual flag value (model, session id, …) still passes
+  the same identifier whitelist as the claude/codex bridges. The bridge
+  registers as the built-in **`grok-native`** — the bare `grok` name stays
+  owned by the user's `config.providers` (ACP transport on existing
+  deployments, whose durable registry sessions keep working unchanged).
 - **One global instance holds all shared state.** Bindings, the registry, and
   the concurrency slots live only in the single global `apply()` instance;
   `presetRow` instances are stateless, so preset-row rewrites and the global
