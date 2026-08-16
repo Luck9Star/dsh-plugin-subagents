@@ -124,6 +124,16 @@ test('full branch: legacyProductAliases accepts auto/true/false, rejects other s
   assert.throws(() => validateConfig({ legacyProductAliases: 'yes' }), /legacyProductAliases/)
 })
 
+test('full branch: relayReportGuard accepts true/false; the presetRow branch rejects it (red line 9)', () => {
+  assert.equal(validateConfig({ relayReportGuard: true }).relayReportGuard, true)
+  assert.equal(validateConfig({ relayReportGuard: false }).relayReportGuard, false)
+  assert.equal(validateConfig({}).relayReportGuard, undefined, 'absent = default true (applied at lib/index.js)')
+  assert.throws(() => validateConfig({ relayReportGuard: 'off' }), /relayReportGuard/)
+  // the official preset-row shape never grows this key — a presetRow instance
+  // is native-only and stateless, so the guard does not apply
+  assert.throws(() => validateConfig({ presetRow: true, provider: 'spawn', relayReportGuard: true }), /relayReportGuard/)
+})
+
 test('presetRow branch: official row shape passes with toolName defaulting to subagent', () => {
   const cfg = validateConfig({ presetRow: true, provider: 'spawn' })
   assert.equal(cfg.presetRow, true)

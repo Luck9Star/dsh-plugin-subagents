@@ -255,3 +255,50 @@ test('registerSubagentSubmit validates the deps wiring loudly', () => {
     /assembled\.state to expose/,
   )
 })
+
+// ---- D2b relay epoch 计数（noteRelaySubmit 在 execute 入口自增） ----
+
+test('D2b: every submit counts the epoch (execute entrance, not forward success)', async (t) => {
+  const { state, ctx } = makeDeps(t)
+  state.noteRelayEpochStart?.('child-1')
+  state.bindings.set('child-1', {
+    product: 'fake',
+    bridge: { submit: async () => ({ text: 'ok', stopReason: 'completed' }) },
+    remote: { sessionId: 's-live' },
+    settings: undefined,
+  })
+  await ctx.tool('subagent_submit').execute({ task: 'a' }, execFor('child-1'))
+  await ctx.tool('subagent_submit').execute({ task: 'b' }, execFor('child-1'))
+  assert.equal(state.relayEpochs.get('child-1').submits, 2, 'each execute counts, whatever the forward outcome')
+})
+
+test('D2b: a FAILED submit still counts (reporting the error is a legal closure)', async (t) => {
+  const bridge = fakeBridge()
+  bridge.submit = async () => { throw new Error('submit boom') }
+  const { state, ctx } = makeDeps(t, { bridge })
+  state.noteRelayEpochStart?.('child-f')
+  state.bindings.set('child-f', {
+    product: 'fake',
+    bridge,
+    remote: { sessionId: 's-f' },
+    settings: undefined,
+  })
+  await assert.rejects(ctx.tool('subagent_submit').execute({ task: 'x' }, execFor('child-f')), /submit boom/)
+  assert.equal(state.relayEpochs.get('child-f').submits, 1, 'counted at the entrance — the relay did try to forward')
+})
+
+test('D2b: the legacy product_submit alias counts through the same execute', async (t) => {
+  const registry = tmpRegistry(t)
+  const state = createBridgeState({ registry })
+  const tools = new Map()
+  const ctx = {
+    tools: { register: (tool) => tools.set(tool.name, tool) },
+    tool: (name) => tools.get(name),
+  }
+  const bridge = fakeBridge()
+  const assembled = { state, providerBridges: { fake: bridge } }
+  registerSubagentSubmit(ctx, { assembled, config: {}, toolName: 'product_submit' })
+  registry.set('legacy-child', { backend: 'fake', remoteId: 'r1', cwd: '/tmp', settings: { permissionMode: 'readonly' } })
+  await ctx.tool('product_submit').execute({ task: 'old vocab' }, execFor('legacy-child'))
+  assert.equal(state.relayEpochs.get('legacy-child').submits, 1, 'the alias lazily creates the counter entry (cold-resume first turn)')
+})

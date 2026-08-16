@@ -56,6 +56,51 @@
    - [ ] 旧 product_* 工具不再存在（除 legacy 别名场景——本机 registry 无旧条目，不应出现）
    - [ ] `plan_agent` 等 presetRow 增强行可用且带 per-call 覆盖参数
 
+## B2. D2b 复测协议（relay 回合闭环校验，修复后执行）
+
+> 背景：D2b 原始证据见「已知边界」区 backlog 条目（2026-08-15 22:25 窗口）。
+> 修复 = 确定性 guard（lib/relay-guard.js）+ persona 硬化句 + progress/wait
+> 观测标记；机制与边界见 DESIGN §5.4.1。以下协议在**重启后的新会话**执行。
+
+1. **主复现（应 PASS）**：`subagent {backend:"codex", prompt:"Which
+   product/CLI are you running as? Reply with the product name only.",
+   run_in_background:true}` → `subagent_wait` 该子代理。
+   判据（全部满足才算过）：
+   - 最终 answer 含 "Codex"（远端真回答），**或** answer 带
+     `[relay-guard: not forwarded via subagent_submit …]` 前缀且子代理日志
+     显示 guard 拒绝后模型补调了 subagent_submit；
+   - `~/.codex/sessions/…` 出现对应时间窗的新 rollout 文件（磁盘工件）；
+   - `subagent_progress` 该子代理：`relayEpochSubmits >= 1`。
+2. **guard 拒绝路径（行为观察）**：若 relay 首次仍尝试零转发 report，子代理
+   侧工具结果应出现 `Error: You are a bridge relay: …` 文本（guard 拒因），
+   且回合未中断（子代理继续调 subagent_submit）。
+3. **阴性对照（native 不受扰）**：native 子代理正常 report（无 guard 拒绝，
+   progress 无 relayEpochSubmits/relayGuardFlag 键）。
+4. **开关回归（可选）**：`relayReportGuard: false` 时 guard 不注册
+   （`subagent_progress` 仍带观测键）。
+5. **磁盘/registry 佐证**：registry 条目 `backend=codex` 的 remoteId 非空。
+6. **冷恢复两 epoch（评审追加）**：冷恢复（binding 已释放、registry 条目在）
+   的新 epoch 必须**重新归零**计数——否则前一个 epoch 的 submit 残留会让新
+   epoch 的零转发自答 report 漏拒。两种可执行变体：
+   - a) **idle 超时唤醒**：完成第 1 步后等待 idle 超时（profile 配置
+     `idleTimeoutMs: 600000`，10 分钟），再 `send_message` 唤醒同一 bridge
+     子代理、重发一次自指型探针（"Which product/CLI are you running as?
+     …"）。期望：新 epoch 内 report 先被拒（子代理日志出现 `Error: You are
+     a bridge relay: …`）或先出现 subagent_submit；`subagent_progress` 的
+     `relayEpochSubmits` 在新 epoch 开始时回到 0/1 而非延续旧值。
+   - b) **重启后恢复**：重启 dsh（web），`send_message` 唤醒 registry 记录的
+     该子代理（registry 是唯一恢复源），重发自指型探针，判据同上（a）。
+   > 该场景已由 live-root probe 复证（2026-08-15，修复后）：真实
+   > `SubagentActivationSetupRegistry`（自 live root 逐字提取，锚点校验）+
+   > 本仓真实 `createBridgeState`/`attachBridgeLifecycle`/`attachRelayGuard`，
+   > 17 PASS / 0 FAIL —— 两 epoch 冷恢复场景中 epoch2 计数归零（binding ∪
+   > registry 并集）、零 submit report 被真实 registry 装配的 guard 拒绝
+   > （拒因原文输出）、补 submit 后放行；contribution 移除路径
+   > （releaseAll → installation.dispose()）不再抛
+   > "installation.dispose is not a function"，guard 注销干净（含
+   > undefined-returning installer 的灵敏度阴性对照）。probe 脚本为一次性
+   > /tmp 产物，未入仓。
+
 ## C. 已知边界
 
 > 补充说明：A13/A14 两条冒烟是 bridge 层**直连**真实 agent 的协议级端到端
@@ -144,7 +189,8 @@
      删除官方 control 行无必要；本插件 progress/wait 以全局层顶名，携带 bridge-aware 富数据
      （pinnedProduct / remoteSessionId）。证据文件位置：lib/drivers/bridge.js continuable 路由、
      lib/drivers/native.js L235 附近、官方 dsh-tool-subagent-control lib/index.js:57 的 followup 调用。
-- **【backlog · P2 行为缺陷，下一轮修复候选】continuable bridge relay 在自指型 prompt 下可不经
+- **【backlog · P2 行为缺陷 —— ✅ 已修复（DESIGN §5.4.1），复测协议见 B2】**
+  continuable bridge relay 在自指型 prompt 下可不经
   `subagent_submit` 转发、以 report 自答**（如回答宿主框架名），造成产品身份静默错误归因。
   证据链（D2b，2026-08-15 22:25 窗口）：relay descriptor/persona 正确（"You are a relay bridge to
   the Codex CLI agent. For every user message you receive, call subagent_submit…"）；工具面
@@ -153,14 +199,10 @@
   `subagent_submit`；佐证：窗口内无新 codex rollout、registry remoteId=—。
   最小复现：`subagent {backend:"codex", prompt:"Which product/CLI are you running as? Reply with
   the product name only.", run_in_background:true}`。
-  加固方向：a) relay 回合闭环校验（无 `subagent_submit` 调用的回合拒绝/标记 report——确定性）；
-  b) relay persona 增加硬性措辞（绝不谈论自身运行时、任何问题一律转发——概率性，单独不够）。
-- **【backlog · P3】subagent 工具的 backend 参数描述文案 "(none detected on this deployment)" 与
-  enum 全量（grok/codex/claude-code/acp…）矛盾**——疑描述文本与 enum 来源不同步（功能无影响）；
-  下一轮查 lib/tools/subagent.js 的 backendIds 描述构造。
-- **【backlog · P3】subagent_progress 的 trace brief 占位符**：payload 缺 turn/step 时输出
-  "turn undefined start / step undefined.undefined"（lib/progress.js compactEvent）——应改为省略
-  编号或标注缺失。
+  修复（两层加固方向均已实现）：a) 确定性回合闭环校验 —— registerContinuableSetup +
+  childCtx.tools.guard 拒绝零转发 epoch 的 report（lib/relay-guard.js）+ progress/wait 观测标记
+  + relayReportGuard 开关；b) persona 硬化句（"NEVER answer from your own knowledge, identity,
+  or runtime…"）。单测：test/relay-guard.test.js 等。
 - **INFO 备忘（设计现状，非缺陷）**：前台 bridge 调用不返回 childId、不进 list_agents —— 宿主侧
   取证需后台模式或磁盘工件。
 

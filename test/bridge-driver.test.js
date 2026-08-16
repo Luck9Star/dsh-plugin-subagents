@@ -432,6 +432,12 @@ test('continuable route: startContinuable receives relay persona (subagent_submi
   assert.match(call.request.persona, /subagent_submit/, 'relay persona names the pipe tool')
   assert.ok(!call.request.persona.includes('product_submit'), 'no legacy product_submit wording')
   assert.match(call.request.persona, /You MAY delegate/, 'delegation sentence appended when allowed')
+  // D2b persona hardening: the relay must never answer from its own knowledge
+  // (the identity-question failure), and must know the guard will reject
+  // un-forwarded reports.
+  assert.match(call.request.persona, /NEVER answer from your own knowledge, identity, or runtime/)
+  assert.match(call.request.persona, /must go through subagent_submit/)
+  assert.match(call.request.persona, /A report without a subagent_submit call in the same turn will be rejected/)
   // red line 1: the relay is a read-only pipe — allowlist exactly the two names
   assert.deepEqual(call.request.toolFilter.allow, ['subagent_submit', 'subagent'])
 
@@ -592,6 +598,103 @@ test('attachBridgeLifecycle: subagent/start event cancels the pending-start guar
   await sleep(80)
   assert.ok(state.bindings.has('c-1'), 'started child survives the guard timeout')
   assert.ok(!bridge.calls.some((c) => c.op === 'dispose'))
+})
+
+// ── attachBridgeLifecycle：D2b relay epoch 计数与零-submit 告警 ──────────────
+
+test('D2b: subagent/start resets the relay epoch counter; end warns and flags zero-submit epochs', async (t) => {
+  const registry = tmpRegistry(t)
+  const bridge = fakeBridge()
+  const state = createBridgeState({ registry, idleTimeoutMs: 0, pendingStartGuardMs: 60000 })
+  const [provider] = createBridgeProviders({ bridges: { fake: bridge }, providers: PROVIDER_DEFS, state })
+  const logs = []
+  const ctx = fakeCtx()
+  ctx.logger = { warn: (m) => logs.push(m) }
+  attachBridgeLifecycle(ctx, state)
+
+  await provider.prepareContinuable({ sessionId: 'c-1', parent })
+  ctx.dispatch('subagent/start', { id: 'c-1' })
+  assert.equal(state.relayEpochs.get('c-1').submits, 0, 'epoch start resets to zero')
+
+  ctx.dispatch('subagent/end', { id: 'c-1' })
+  assert.equal(logs.length, 1, 'zero-submit epoch warns once')
+  assert.match(logs[0], /relay child "c-1" ended an epoch with zero subagent_submit/)
+  assert.match(logs[0], /relay model's own output/)
+  assert.equal(state.lastRelayEpochNoForward('c-1'), true, 'flag recorded for observability')
+
+  // forwarding epoch: counter reset by start, incremented by the submit tool
+  // layer, end neither warns nor flags
+  ctx.dispatch('subagent/start', { id: 'c-1' })
+  state.noteRelaySubmit('c-1')
+  ctx.dispatch('subagent/end', { id: 'c-1' })
+  assert.equal(logs.length, 1, 'no second warning for a forwarding epoch')
+  assert.equal(state.lastRelayEpochNoForward('c-1'), false, 'flag cleared')
+})
+
+test('D2b: cold resume resets the epoch counter via the binding ∪ registry union (review MAJOR-1)', async (t) => {
+  const registry = tmpRegistry(t)
+  const bridge = fakeBridge()
+  const state = createBridgeState({ registry, idleTimeoutMs: 0, pendingStartGuardMs: 60000 })
+  const [provider] = createBridgeProviders({ bridges: { fake: bridge }, providers: PROVIDER_DEFS, state })
+  const logs = []
+  const ctx = fakeCtx()
+  ctx.logger = { warn: (m) => logs.push(m) }
+  attachBridgeLifecycle(ctx, state)
+
+  await provider.prepareContinuable({ sessionId: 'cold-1', parent })
+  // epoch 1 forwards once, then the binding is lost (idle disposal / restart)
+  ctx.dispatch('subagent/start', { id: 'cold-1' })
+  state.noteRelaySubmit('cold-1')
+  ctx.dispatch('subagent/end', { id: 'cold-1' })
+  assert.equal(logs.length, 0, 'forwarding epoch: no warning')
+  state.bindings.delete('cold-1')
+  assert.ok(registry.get('cold-1'), 'registry entry survives')
+
+  // epoch 2 is a COLD resume (registry-only): the counter MUST reset here —
+  // a binding-only reset would leave submits at 1 and let a zero-forward
+  // self-answer report slip past the guard (review MAJOR-1).
+  ctx.dispatch('subagent/start', { id: 'cold-1' })
+  assert.equal(state.relayEpochs.get('cold-1').submits, 0, 'union reset: registry-only child starts the new epoch at zero')
+
+  // zero submits in epoch 2 → end warns + flags (the guard would deny too)
+  ctx.dispatch('subagent/end', { id: 'cold-1' })
+  assert.equal(logs.length, 1, 'zero-submit cold-resumed epoch warns')
+  assert.match(logs[0], /zero subagent_submit/)
+  assert.equal(state.lastRelayEpochNoForward('cold-1'), true)
+})
+
+test('D2b: registry-only epoch reset does not touch concurrency slots (binding-only semantics unchanged)', async (t) => {
+  const registry = tmpRegistry(t)
+  const state = createBridgeState({ registry, idleTimeoutMs: 0, pendingStartGuardMs: 60000 })
+  registry.set('cold-2', { backend: 'fake', remoteId: 'r', cwd: '/w' })
+  const logs = []
+  const ctx = fakeCtx()
+  ctx.logger = { warn: (m) => logs.push(m) }
+  attachBridgeLifecycle(ctx, state)
+
+  ctx.dispatch('subagent/start', { id: 'cold-2' })
+  assert.equal(state.relayEpochs.get('cold-2').submits, 0, 'union reset applies')
+  assert.equal(state.liveChildren.has('cold-2'), false, 'a registry-only child takes NO concurrency slot (binding-only, unchanged)')
+  assert.equal(state.pendingStarts.has('cold-2'), false, 'no pending-start guard armed either')
+
+  // a forwarding cold-resumed epoch stays silent
+  state.noteRelaySubmit('cold-2')
+  ctx.dispatch('subagent/end', { id: 'cold-2' })
+  assert.equal(logs.length, 0)
+  assert.equal(state.lastRelayEpochNoForward('cold-2'), false)
+})
+
+test('D2b: native children (no binding, no registry entry) never touch the epoch machinery', async (t) => {
+  const registry = tmpRegistry(t)
+  const state = createBridgeState({ registry, idleTimeoutMs: 0 })
+  const logs = []
+  const ctx = fakeCtx()
+  ctx.logger = { warn: (m) => logs.push(m) }
+  attachBridgeLifecycle(ctx, state)
+  ctx.dispatch('subagent/start', { id: 'native-kid' })
+  ctx.dispatch('subagent/end', { id: 'native-kid' })
+  assert.equal(logs.length, 0)
+  assert.equal(state.relayEpochs.has('native-kid'), false)
 })
 
 test('ctx.effect teardown (disposeAll) clears timers and disposes every binding', async (t) => {

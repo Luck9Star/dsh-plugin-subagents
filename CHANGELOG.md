@@ -154,6 +154,30 @@ takes over the official `subagent` / `subagent_fork` tool names.
 
 ### Fixed
 
+- Fixed bridge relay children silently self-answering instead of forwarding
+  (2026-08-15 smoke D2b). A continuable relay asked a self-referential
+  question ("which product/CLI are you running as?") answered from its own
+  system prompt and closed the turn with only a `report` call — never calling
+  `subagent_submit` — so the parent received the relay model's own answer
+  attributed to the remote product, with no error anywhere (registry
+  `remoteId: —`, no remote session artifacts). The fix makes "did the relay
+  actually forward?" a deterministic check (DESIGN §5.4.1), in three layers:
+  a turn-closure guard (new `lib/relay-guard.js`, attached via the host's
+  `ctx.subagents.registerContinuableSetup` + `childCtx.tools.guard` seam —
+  the same channel the official in-process driver uses) that rejects a
+  relay's `report` call with a corrective `Error: …` result while the turn
+  continues, so the model can forward and report afterwards; a hardening
+  sentence appended to every relay persona (`NEVER answer from your own
+  knowledge, identity, or runtime …`); and observability markers
+  (`subagent_progress` gains `relayEpochSubmits` / `relayGuardFlag`,
+  `subagent_wait` prefixes a flagged answer, the `subagent/end` hook warns on
+  zero-submit epochs) because the harness settlement notice itself is not
+  interceptable by a plugin. Counting happens at the `subagent_submit`
+  execute entrance (a failed forward still counts — reporting the error is a
+  legal closure), the legacy `product_submit` alias shares the same execute,
+  and cold-resumed registry-only children are recognized via the binding ∪
+  registry union. New config key `relayReportGuard` (default `true`,
+  full-branch only — presetRow rows are stateless and never guarded).
 - Fixed preset adaptation L2 producing an unmountable preset (2026-08-15
   smoke incident). `--enhance-rows` rewrote EVERY official
   `dsh-tool-subagent` row to `presetRow: true`, including the fork row

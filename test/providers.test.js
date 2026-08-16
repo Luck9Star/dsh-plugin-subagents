@@ -74,6 +74,11 @@ test('providerPersona carries the subagent_submit relay verb and never product_s
     assert.match(persona, /subagent_submit/, `${name} persona names the subagent_submit tool`)
     assert.doesNotMatch(persona, /product_submit/, `${name} persona must not reference product_submit`)
     assert.doesNotMatch(persona, /product_delegate/, `${name} persona must not reference product_delegate`)
+    // D2b hardening: never self-answer (identity/runtime questions included);
+    // un-forwarded reports will be rejected (the deterministic guard's wording)
+    assert.match(persona, /NEVER answer from your own knowledge, identity, or runtime/, `${name} persona forbids self-answering`)
+    assert.match(persona, /which product\/CLI\/model you are running as/, `${name} persona names the identity-question trap`)
+    assert.match(persona, /A report without a subagent_submit call in the same turn will be rejected/, `${name} persona states the guard`)
   }
   assert.match(providerPersona('claude-code', providers['claude-code']), /Claude Code/)
   assert.match(providerPersona('codex', providers.codex), /Codex/)

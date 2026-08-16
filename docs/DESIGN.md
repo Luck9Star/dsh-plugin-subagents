@@ -346,6 +346,61 @@ run_in_background  boolean 默认随 backgroundMode（delegate=continuable→tru
 - 适配后/无通用行的 preset：全局层本插件提供；
 - 未适配 standard：preset 层官方 `subagent` 顶名（native-only 降级可用），`subagent_submit` 来自全局层 —— 均在继承面内，restriction 校验可通过。
 
+#### 5.4.1 回合闭环确定性校验（D2b 修复）
+
+**缺陷背景**（2026-08-15 真机 D2b）：continuable bridge relay 在自指型 prompt
+（"Which product/CLI are you running as?"）下按自身系统提示自答、仅调 report
+闭环、从不调 `subagent_submit`，无任何报错 —— 父代理静默拿到 relay 自答却
+以为是远端产品的回答（registry remoteId=—、远端无会话工件佐证）。装配层面
+（persona / 只读 toolFilter）全部正确，缺的是「relay 是否真转发过」的确定性
+校验。修复共三层：
+
+1. **确定性层 —— turn-closure guard（lib/relay-guard.js）**。经宿主
+   `ctx.subagents.registerContinuableSetup(contribution)` 为每个 continuable
+   child 装配 `childCtx.tools.guard(fn)`（官方 dsh-subagent-in-process-driver
+   同款先例；guard 在 pre-execute waterfall 后运行，返回字符串 → 本次调用以
+   `Error: <reason>` isError 结果返回给模型、**回合继续** —— relay 仍可补调
+   `subagent_submit` 后再 report，不炸子代理、不吞回合）。拒因只在一个条件
+   全部成立时出现：调用是 `report` 且携带可解析的 child session id；该会话是
+   bridge relay 子代理（live binding ∪ durable registry 条目 —— 冷恢复并集
+   判定）；本 epoch `subagent_submit` 计数为 0。其余一切（native 子代理、非
+   report 工具、submits > 0）零干扰。**同 scope 顶名 shadow 不可行**：官方
+   report 工具经同一 SetupRegistry 注册，同名 contribution 会让 child 创建
+   整体回滚 —— 本设计明确禁止该路径。guard 只拒绝/放行既有 report 调用，
+   **不给 relay 增加任何工具**（红线 1 维持）。计数在 `subagent_submit`
+   execute 入口自增、不以转发成功为准（submit 失败后 report 错误是合法闭
+   环）；legacy 别名 `product_submit` 复用同一 execute 自动生效。
+2. **概率层 —— persona 硬化句（lib/providers.js）**。三条 provider persona
+   尾部统一追加：`NEVER answer from your own knowledge, identity, or
+   runtime — you are a relay, not the worker. …`（点名身份类问题陷阱 +
+   声明 guard 会拒绝未转发的 report）。单独不够，是确定性层的降噪补充。
+3. **观测层 —— progress/wait 软防线**。`subagent_progress` 对 relay 子代理增
+   `relayEpochSubmits`（当前 epoch 计数）与 `relayGuardFlag:
+   'last-epoch-no-forward'`（仅当最近已完成 epoch 零 submit 时出现，未命中
+   整键省略）；`subagent_wait` 结算时 `lastRelayEpochNoForward(childId)` 为真
+   且 answer 非空 → answer 前缀 `[relay-guard: not forwarded via
+   subagent_submit — relay model's own output, not the remote product's] `。
+   end 钩子对零-submit epoch 记 `ctx.logger.warn` 一行。
+
+**epoch 语义与欠严格边界**：`subagent/start` / `subagent/end` 每个 Activation
+（residency epoch）各一次，一次 epoch 通常恰一个回合；罕见 settle 前唤醒复用
+同一 Activation → 多回合共用一次计数（跨回合累计，**漏拒不误拒** —— 宁可放
+过一个多回合 epoch 里的第二个自答回合，也不误拒合法转发后的 report）。**冷
+恢复（send_message 唤醒 registry-only 子代理）的 epoch 归零用与 end 钩子同款
+的 relay 并集判定（binding ∪ registry）**—— 若只按 binding 归零，冷恢复子代
+理的 submits 会跨 epoch 残留、后续 epoch 的零转发自答 report 将漏拒（评审
+MAJOR-1 修复后语义）；并发槽 `liveChildren.add` 仍仅 binding 命中（占槽语义
+不变）。首回合若 submit 先于任何 start 事件，`noteRelaySubmit` 惰性建
+`{submits:1}` 兜底。
+
+**settlement 通知不可改写说明**：harness 的 notifySettlement 直接把子代理最后
+assistant 消息发给父会话，是 dsh-subagent 包内部代码、插件不可拦截 —— 这是
+观测层只能做「标记」而非「阻断」的原因；确定性阻断只存在于子代理自己的工具
+面（guard 层）。
+
+**开关**：`relayReportGuard`（全量 config 分支，默认 `true`；红线 9 —— presetRow
+官方行分支永不含此键）。presetRow 实例无 bridge 状态（红线 10），永不挂 guard。
+
 ### 5.5 共享治理（driver 之上）
 
 - **并发槽**：仅 bridge continuable 占槽（`liveChildren` 严格配对 + `endedAt` 防重复占槽，照搬现实现）；native 后台走 harness jobs，harness 自治。

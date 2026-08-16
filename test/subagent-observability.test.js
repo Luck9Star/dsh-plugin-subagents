@@ -245,6 +245,57 @@ test('wait: concurrent waiters on the same child all resolve once', async () => 
   assert.equal(ctx.listenerCount('subagent/end'), 0)
 })
 
+// ---- wait：D2b relay 前缀（零-submit epoch 的 answer 标记） ----
+
+test('wait: a flagged relay answer carries the relay-guard prefix; forwarding and native answers do not', async () => {
+  // flagged: last completed epoch had zero subagent_submit calls
+  const flaggedState = {
+    bindings: new Map(),
+    registry: new Map(),
+    lastRelayEpochNoForward: (id) => id === 'c1',
+  }
+  const ctxFlagged = waitCtx({ children: [{ id: 'c1', activity: 'active' }] })
+  registerSubagentWait(ctxFlagged, { ...waitDeps, assembled: { state: flaggedState } })
+  const pending = ctxFlagged.tool('subagent_wait').execute({ subagent_id: 'c1', timeout_ms: 5000 }, exec)
+  setTimeout(() => ctxFlagged.emit('subagent/end', {
+    id: 'c1',
+    stopReason: 'completed',
+    lastAssistantMessage: [{ type: 'text', text: "I'm DeepSeek Harness" }],
+  }), 10)
+  const out = await pending
+  assert.match(out.answer, /^\[relay-guard: not forwarded via subagent_submit/)
+  assert.match(out.answer, /I'm DeepSeek Harness/)
+
+  // forwarding epoch: flag clear → verbatim answer, no prefix
+  const cleanState = {
+    bindings: new Map(),
+    registry: new Map(),
+    lastRelayEpochNoForward: () => false,
+  }
+  const ctxClean = waitCtx({ children: [{ id: 'c1', activity: 'active' }] })
+  registerSubagentWait(ctxClean, { ...waitDeps, assembled: { state: cleanState } })
+  const pendingClean = ctxClean.tool('subagent_wait').execute({ subagent_id: 'c1', timeout_ms: 5000 }, exec)
+  setTimeout(() => ctxClean.emit('subagent/end', {
+    id: 'c1',
+    stopReason: 'completed',
+    lastAssistantMessage: [{ type: 'text', text: 'Codex says hi' }],
+  }), 10)
+  const clean = await pendingClean
+  assert.equal(clean.answer, 'Codex says hi', 'no prefix once the epoch forwarded')
+
+  // pre-D2b wiring (no assembled in deps): no prefix, no crash
+  const ctxLegacy = waitCtx({ children: [{ id: 'c1', activity: 'active' }] })
+  registerSubagentWait(ctxLegacy, waitDeps)
+  const pendingLegacy = ctxLegacy.tool('subagent_wait').execute({ subagent_id: 'c1', timeout_ms: 5000 }, exec)
+  setTimeout(() => ctxLegacy.emit('subagent/end', {
+    id: 'c1',
+    stopReason: 'completed',
+    lastAssistantMessage: [{ type: 'text', text: 'plain answer' }],
+  }), 10)
+  const legacy = await pendingLegacy
+  assert.equal(legacy.answer, 'plain answer', 'no assembled → no flag lookup → no prefix')
+})
+
 // ---- subagent_progress ----
 
 test('progress: bridge binding path — PS shape (pinned product, remote id, inFlight, settings, fold)', async () => {
@@ -382,6 +433,49 @@ test('progress: registration guards — native.spawn and state.bindings are requ
     () => registerSubagentProgress(ctx, { assembled: { native: { spawn: {} }, state: {} }, ...realFolds }),
     /state\.bindings/,
   )
+})
+
+// ---- progress：D2b relay 观测标记（relayEpochSubmits / relayGuardFlag） ----
+
+test('progress: bridge path carries the D2b relay epoch counters; the no-forward flag appears only when set', async () => {
+  const bindings = new Map()
+  bindings.set('c-bridge', {
+    product: 'codex',
+    remote: { threadId: 'thread-9' },
+    settings: { model: 'gpt-5-codex' },
+  })
+  // a real-shape state kernel slice: relayEpochs + lastRelayEpochNoForward
+  const relayEpochs = new Map([['c-bridge', { submits: 2 }]])
+  const flagged = new Set()
+  const assembled = progressAssembled({ bindings })
+  assembled.state = {
+    ...assembled.state,
+    relayEpochs,
+    lastRelayEpochNoForward: (id) => flagged.has(id),
+  }
+  const ctx = observCtx({
+    children: [{ id: 'c-bridge', activity: 'running', mode: 'continuable', label: 'codex research', hasChildren: false }],
+  })
+  registerSubagentProgress(ctx, { assembled, ...realFolds })
+  const out = await ctx.tool('subagent_progress').execute({ subagent_id: 'c-bridge' }, exec)
+  assert.equal(out.relayEpochSubmits, 2, 'current epoch submit count surfaces')
+  assert.equal('relayGuardFlag' in out, false, 'no flag key when the last epoch forwarded')
+
+  // a zero-submit completed epoch: the flag appears verbatim
+  relayEpochs.set('c-bridge', { submits: 0 })
+  flagged.add('c-bridge')
+  const out2 = await ctx.tool('subagent_progress').execute({ subagent_id: 'c-bridge' }, exec)
+  assert.equal(out2.relayGuardFlag, 'last-epoch-no-forward')
+  assertLosslessJsonValue(out2)
+})
+
+test('progress: relay keys stay omitted for native children and pre-D2b state shapes', async () => {
+  const assembled = progressAssembled({}) // state has no relayEpochs → undefined-safe
+  const ctx = observCtx({ children: [{ id: 'c-native', activity: 'running', mode: 'continuable', label: 'x', hasChildren: false }] })
+  registerSubagentProgress(ctx, { assembled, ...realFolds })
+  const out = await ctx.tool('subagent_progress').execute({ subagent_id: 'c-native' }, exec)
+  assert.equal('relayEpochSubmits' in out, false)
+  assert.equal('relayGuardFlag' in out, false)
 })
 
 // ---- subagent_roles ----

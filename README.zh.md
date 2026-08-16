@@ -10,6 +10,7 @@ DeepSeek Harness 的统一子代理插件：一套 `subagent*` 工具族覆盖�
 - **原生逐次调用覆盖** —— `model`（裸 id 或 `provider/model` 组合）、`provider`、`persona`（含 `@preset:` 引用）、`toolFilter`，以及逐次调用的 `cwd`（由本仓库安装脚本分发的两枚最小补丁提供）。
 - **CLI bridges** —— Claude Code（`--session-id` / `--resume`）、Codex（JSONL 线程捕获、`resume`）与通用 ACP 桥（持久进程、`session/load` 重连、厂商通知吸收）。任意 ACP CLI 经 `config.providers` 零代码接入。
 - **带权限天花板的角色库** —— 声明式角色锁定后端、远端权限档、附加指令与 native overrides。委派树上 `readonly < default < full` 不可上调；未知的存量权限档一律按 `readonly` 从严（fail closed）。
+- **relay 回合闭环校验（D2b）** —— bridge relay 子代理本回合还没经 `subagent_submit` 转发就想 `report` 自答时，该 report 调用被拒绝并返回纠正性错误（模型仍可转发后再 report）；relay persona 附带同款硬化句，`subagent_progress` / `subagent_wait` 透出零转发的 epoch（`relayEpochSubmits`、`relayGuardFlag`、answer 前缀标记）—— 自答的 relay 再也无法静默冒充远端产品。开关：`relayReportGuard`（默认 `true`）。
 - **durable 恢复** —— bridge 子代理在空闲释放与重启后仍可恢复（持久注册表：0600 属主原子写、500 条上限）；native 子代理随 harness 会话持久化。前身 `legacy-bridges-plugin` 的注册表首载时一次性迁移，旧 relay 子代理可经 `product_submit` / `product_delegate` 别名继续使用。
 - **安装 + 体检** —— 两段式安装器（强制的 `dsh-tools` 单实例链接修复 + 可选的 cwd 补丁）与只读 `verify` 体检，把 npx 缓存漂移大声报出来，而不是让它静默失效。
 
@@ -95,8 +96,8 @@ dsh plugin --profile web add "$(pwd)"
 | `subagent` | 接管官方名 | 统一委派入口；默认 native，`backend` / `role` 切换到外部 CLI |
 | `subagent_fork` | 接管官方名 | native fork（子代理继承本会话已完成回合）+ 逐次调用覆盖；出现 bridge 参数即大声报错 |
 | `subagent_submit` | relay 管道 | 向该子代理绑定的持久远程产品会话提交一个任务（仅 bridge 可续续子代理可用） |
-| `subagent_progress` | 观测 | 单个子代理的状态 + 内部 trace + token 用量 —— native 与 bridge 通用 |
-| `subagent_wait` | 观测 | 事件驱动地等待可续续子代理结算并返回其答案（`timeout_ms` 缺省 300000，上限 600000） |
+| `subagent_progress` | 观测 | 单个子代理的状态 + 内部 trace + token 用量 —— native 与 bridge 通用；bridge 子代理另透出本 epoch 的 `subagent_submit` 计数，epoch 零转发时出现 `last-epoch-no-forward` 标记 |
+| `subagent_wait` | 观测 | 事件驱动地等待可续续子代理结算并返回其答案（`timeout_ms` 缺省 300000，上限 600000）；被标记的 relay 答案（epoch 零转发）带 `[relay-guard: …]` 前缀 |
 | `subagent_roles` | 观测 | 角色目录：id、描述、锁定后端、权限档、可否再委派 |
 | `subagent_agents` | 观测 | bridge CLI 可用性 + native provider + 在册子代理总览 |
 
@@ -159,6 +160,7 @@ bridge（自前身全量保留）：
 | `registryPath` | string | `~/.dsh/subagents-registry.json` | 持久注册表路径 |
 | `idleTimeoutMs` | ≥ 0 整数 | `600000` | 结算后的 bridge 子代理闲置多久释放远端会话（`0` 禁用） |
 | `maxConcurrentChildren` | 正整数 | `8` | 正有一轮任务在跑的 bridge 可续续子代理上限（native 后台走 harness jobs，不占名额） |
+| `relayReportGuard` | boolean | `true` | D2b 回合闭环校验：relay 子代理本回合未调 `subagent_submit` 就 report 时拒绝该调用（模型收到纠正性错误后仍可转发再 report）；`false` 恢复不校验的旧行为 |
 | `rolesDir` | string | 包内 `roles/` | 角色库目录 |
 
 迁移：

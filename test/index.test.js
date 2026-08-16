@@ -60,6 +60,7 @@ function fakeCtx({ registered = ['spawn', 'fork'], toolHost } = {}) {
   const registeredProviders = []
   const listeners = new Map()
   const teardowns = []
+  const continuableContributions = []
   const logs = { fatal: [], warn: [] }
   return {
     tools: toolHost ?? {
@@ -77,6 +78,14 @@ function fakeCtx({ registered = ['spawn', 'fork'], toolHost } = {}) {
         dispose: async () => {},
       }),
       startContinuable: async () => ({ childId: 'child-1', messageId: 'msg-1' }),
+      // D2b relay guard seam: capture each contribution + hand back its undo.
+      registerContinuableSetup: (contribution) => {
+        continuableContributions.push(contribution)
+        return () => {
+          const idx = continuableContributions.indexOf(contribution)
+          if (idx >= 0) continuableContributions.splice(idx, 1)
+        }
+      },
     },
     on: (event, fn) => {
       const list = listeners.get(event) || []
@@ -94,6 +103,7 @@ function fakeCtx({ registered = ['spawn', 'fork'], toolHost } = {}) {
     __teardowns: teardowns,
     __logs: logs,
     __listeners: listeners,
+    __continuableContributions: continuableContributions,
   }
 }
 
@@ -238,6 +248,41 @@ test('presetRow standalone: exactly one tool, zero providers, no auxiliaries, no
   assert.equal(ctx.__teardowns.length, 0, 'presetRow holds no bridge state → no teardown')
   assert.equal(existsSync(join(dir, 'product-subagents-registry.migrated')), false, 'no migration marker')
   assert.equal(existsSync(legacyPath), true, 'legacy file untouched')
+})
+
+// ---- relay 回合闭环 guard 挂载（D2b） ----
+
+test('relay guard: default global wiring registers exactly one registerContinuableSetup contribution', async (t) => {
+  const { dir, done } = tempDir()
+  shim(dir, 'codex-cli')
+  t.after(done)
+  const ctx = fakeCtx()
+  await apply(ctx, shimmedConfig(dir), { legacyRegistryPath: absentLegacy(dir) })
+  assert.equal(ctx.__continuableContributions.length, 1, 'D2b guard contribution attached by default')
+  // the contribution installs a guard into a child scope (behavioral probe)
+  const installed = []
+  ctx.__continuableContributions[0]({ tools: { guard: (fn) => installed.push(fn) } })
+  assert.equal(installed.length, 1)
+  assert.equal(typeof installed[0], 'function')
+})
+
+test('relay guard: relayReportGuard:false skips the contribution entirely', async (t) => {
+  const { dir, done } = tempDir()
+  shim(dir, 'codex-cli')
+  t.after(done)
+  const ctx = fakeCtx()
+  await apply(ctx, shimmedConfig(dir, { relayReportGuard: false }), { legacyRegistryPath: absentLegacy(dir) })
+  assert.equal(ctx.__continuableContributions.length, 0, 'switched off → no contribution')
+  // the tool surface is unchanged — only the guard layer is skipped
+  assert.deepEqual([...ctx.__tools.keys()].sort(), [...DEFAULT_TOOLS].sort())
+})
+
+test('relay guard: the presetRow branch never registers a contribution (stateless)', async (t) => {
+  const { dir, done } = tempDir()
+  t.after(done)
+  const ctx = fakeCtx()
+  await apply(ctx, { presetRow: true, provider: 'spawn', toolName: 'scout_agent' }, { legacyRegistryPath: absentLegacy(dir) })
+  assert.equal(ctx.__continuableContributions.length, 0, 'presetRow instances hold no bridge state → no guard')
 })
 
 // ---- registry 迁移与 legacy 别名（§6.6） ----

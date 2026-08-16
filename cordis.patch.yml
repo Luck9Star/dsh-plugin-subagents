@@ -38,6 +38,9 @@
         # bridge 并发治理（与旧 legacy-bridges-plugin profile 行同构，迁移即拷贝）。
         idleTimeoutMs: 600000          # 子代理 idle 多久后释放远端资源（毫秒）；bridge 生命周期用
         maxConcurrentChildren: 8       # bridge 并发槽上限；native 后台走 harness jobs,不自治理
+        # relay 回合闭环校验（D2b，默认开启）：relay 子代理本回合未调
+        # subagent_submit 就 report 会被 guard 拒绝（确定性防线）。
+        # relayReportGuard: false      # 如需退回旧行为（不校验）时取消注释
         # backgroundMode 不在此设置：省略即走工具默认 —— 按 DESIGN §6.1 /
         # lib/config.js，delegate 工具默认 continuable（可续续后台）、fork 工具
         # 默认 one-shot，对齐官方 dsh-base 行。

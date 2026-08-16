@@ -28,6 +28,14 @@ with zero migration, and it **fully replaces** both `legacy-cwd-plugin` and
   backend, the remote permission mode, extra instructions, and native
   overrides. `readonly < default < full` can never be raised down the
   delegation tree; unknown stored modes fail closed to `readonly`.
+- **Relay turn-closure guard (D2b)** — a bridge relay child that tries to
+  `report` an answer before forwarding anything through `subagent_submit` in
+  the same turn gets the report call rejected with a corrective error (the
+  model can still forward and report afterwards); relay personas carry a
+  matching hardening sentence, and `subagent_progress` / `subagent_wait`
+  surface zero-submit epochs (`relayEpochSubmits`, `relayGuardFlag`, a
+  labeled answer prefix) so a self-answering relay can never masquerade as
+  the remote product silently. Switch: `relayReportGuard` (default `true`).
 - **Durable recovery** — bridge children survive idle disposal and restarts
   (durable registry: owner-only `0600` atomic writes, 500-entry cap); native
   children persist with the harness session. A predecessor
@@ -173,8 +181,8 @@ once and can keep running through the legacy aliases
 | `subagent` | takes over the official name | unified delegation entry; native by default, `backend` / `role` switch to an external CLI |
 | `subagent_fork` | takes over the official name | native fork (the child inherits this conversation's completed turns) with per-call overrides; bridge parameters fail loudly |
 | `subagent_submit` | relay pipe | submit one task to the persistent remote product session bound to this child (bridge continuable children only) |
-| `subagent_progress` | observability | status + internal trace + token usage of one child — native and bridge alike |
-| `subagent_wait` | observability | event-driven wait until a continuable child settles, returning its answer (`timeout_ms` default 300000, capped 600000) |
+| `subagent_progress` | observability | status + internal trace + token usage of one child — native and bridge alike; bridge children also show the relay epoch's `subagent_submit` count and a `last-epoch-no-forward` guard flag when an epoch closed with zero forwards |
+| `subagent_wait` | observability | event-driven wait until a continuable child settles, returning its answer (`timeout_ms` default 300000, capped 600000); a flagged relay answer (zero forwards in its epoch) is prefixed `[relay-guard: …]` |
 | `subagent_roles` | observability | the role catalog: id, description, pinned backend, permission mode, may-delegate |
 | `subagent_agents` | observability | bridge CLI availability + native providers + live children overview |
 
@@ -245,6 +253,7 @@ Bridge (inherited from the predecessor in full):
 | `registryPath` | string | `~/.dsh/subagents-registry.json` | durable registry location |
 | `idleTimeoutMs` | integer ≥ 0 | `600000` | idle window before a settled bridge child's remote session is released (`0` disables) |
 | `maxConcurrentChildren` | positive integer | `8` | cap on bridge continuable children with a turn in flight (native background runs go through harness jobs and are not counted) |
+| `relayReportGuard` | boolean | `true` | D2b turn-closure guard: reject a bridge relay's `report` call when the current turn has no `subagent_submit` call (the relay model then gets a corrective error and can forward + report). `false` restores the unguarded behavior |
 | `rolesDir` | string | the package's `roles/` | role library directory |
 
 Migration:
