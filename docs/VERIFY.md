@@ -104,6 +104,15 @@
    > 为仓库内持久路径，可重复执行；输出为一次性 stdout，如需留存可用 tee。
 6. **磁盘/registry 佐证**：registry 条目 `backend=codex` 的 remoteId 非空。
 
+### B2 执行结果（2026-08-16 13:23–13:36，修复 91c1f95 + probe 持久化 9739200）
+
+1. **总表**：P0 PASS / 1 主复现 PASS（三判据全满足）/ 2 guard 拒绝路径 PASS-转发优先（relay 首次即正确转发，guard 分支由套件 D2b 用例覆盖）/ 3 native 阴性对照 PASS / 4 开关回归 SKIP（需改 profile 并重启 web，与复测会话互斥；开关分支已由测试覆盖）/ 5a 冷恢复 idle 唤醒 PASS / 5b 重启恢复 SKIP（同上，留作后续专项：以 registry 条目 60e364b7-5074-4f58-9526-aa4743cd63a0 为目标）/ 6 registry 佐证 PASS。**0 FAIL**。
+2. **关键证据摘要**（原文数字）：
+   - **主复现**：childId 60e364b7…，`subagent_wait` 返回 `{status:completed, answer:"Codex"}`（无 relay-guard 前缀）；磁盘新 rollout `rollout-2026-08-16T13-23-40-01a00906-….jsonl`（首行 05:23:40.274Z）含探针原文 ×2；`subagent_progress` `relayEpochSubmits:1`。
+   - **5a 冷恢复**（epoch 归零判别式——advisor 口径，固化为复测标准）：**先记 epoch-1 终值、再取 epoch-2 值，重置 ⇒ epoch-2 ≤ epoch-1（典型 1），延续 ⇒ 累加为 2**。本次：idle 660s（>600000）唤醒同一 childId，epoch-2 `relayEpochSubmits:1`（若延续应为 2 → 归零证实）；无 guard 拒因、1 次 `subagent_submit`、answer "Codex" 干净；rollout 同文件续档 102963→107409 字节、探针计数 2→4、末事件 `task_complete`（05:36:32.980Z, `last_agent_message:"Codex"`）。
+   - **registry 佐证**：本次条目 `backend=codex`、`remoteId=01a00906-…`（与 rollout 文件名、`subagent_progress` remoteSessionId 三方一致）；旁证——registry 中两条修复前 codex 旧条目（ff027c1e、1c4133d2）remoteId 为空，即修复前缺陷历史痕迹。
+3. **结论行**：D2b 修复真机验证通过——转发优先、epoch 计数归零、registry 冷恢复链路完整；5b/4 为后续可选项（非缺陷）。
+
 ## C. 已知边界
 
 > 补充说明：A13/A14 两条冒烟是 bridge 层**直连**真实 agent 的协议级端到端
