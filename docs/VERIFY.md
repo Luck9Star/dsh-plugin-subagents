@@ -25,6 +25,22 @@
 | A16 | preset L2 副本真实组合 | ❌ 结论已推翻 | 当时「新会话成功组合、工具面出现 backend/role 参数」与时间线矛盾：会话持久化记录显示**没有任何会话曾以 orchestrator-subagents 挂载成功**（两个主会话创建时均为 standard）。当时看到的 backend/role 参数来自**全局层插件工具**（原始 orchestrator preset 未遮蔽新名工具，全局 subagent 恰好透出全参数），presetRow 面从未加载。真实验证待修复版 preset 重新挂载后重做 |
 | A17 | 8 行角色化 presetRow 行 | ❌ 结论已推翻 | roster 扫描只证明 YAML 行形状合法，不证明挂载成功；实际挂载在 `tool-subagent-fork` 行被 config 校验拒绝时整体失败（错误原文见下方根因）。修复后产物为 5 行（fork/bridge 行删除），逐行 validateConfig 通过 |
 | A18 | **修复版 preset 真实挂载验证（RPC `session.create`，A16 重做·挂载面）** | ✅ | 独立一次性实例（`dsh --profile web --port 3977`，与 GUI 3080 / 复现实例 3917 隔离，验证后已关停）上 `POST /api/session.create {agentPreset:"orchestrator-subagents"}` → `ok:true`，返回 `{sessionId:"session-ccc8b0e9-…", agentPreset:"orchestrator-subagents"}` —— 与捕获原始挂载错误的**同一条决定性路径**，现为阳性。阴性对照：`agentPreset:"no-such-preset-id"` → `ok:false, code:"agent-preset-not-found"`（roster 列出 orchestrator-subagents），证明该路径确实校验并报错、非无条件 ok。挂载成功即含 `inactiveRows` 检查通过 = 全部行（含 5 行 presetRow 插件行与官方 control 行）激活。会话工具面的运行时行为（B 节清单）仍需用户在 GUI 新会话确认。验证产生的空白会话记录（session-ccc8b0e9-…，cwd /tmp）已当即经 `workspace.archiveSession` 归档清理（同法二次起 3977 实例执行；`workspace.list` 4 工作区均不含该会话，GUI 侧栏不再出现；session.list 全量清单仍含已归档条目属预期） |
+| A19 | **冒烟 v2（修复版 preset + E3 修复）**：17 PASS / 0 FAIL / 2 SKIP | ✅ | 修复版副本上重跑全量冒烟；明细见下方「冒烟 v2 明细」小节 |
+
+### 冒烟 v2 明细（2026-08-15 晚间 · 修复版副本上 · 17 PASS / 0 FAIL / 2 SKIP）
+
+- **P0 全过**：新建会话默认挂载 orchestrator-subagents 成功，工具面齐全 —— `plan_agent` 等
+  presetRow 角色行可用且带 per-call 覆盖参数；`subagent` 全参数 schema 透出
+  （backend/role/model/persona/toolFilter/cwd/permission_mode）。
+- **F1 回归点过**：`subagent_progress` / `subagent_wait` 返回合法 JSON（E3 修复生效）。
+- **D2（前台 codex）PASS**：磁盘证据 `~/.codex/sessions/2026/08/15/rollout-2026-08-15T21-44-57-01a005ab-….jsonl`
+  （16 行，13:44:57.278Z–13:45:05.567Z 窗口）含身份探针原文与 assistant 回答 `"Codex"`。
+- **D1b（后台 grok）PASS**：registry 条目 `backend=grok` 的 remoteSessionId 精确映射
+  `~/.grok/sessions/<cwd>/01a005d0-…/chat_history.jsonl`（mtime 22:26:03），内含探针原文与回答
+  `{"content":"Grok","model_id":"grok-4.6-build"}`。
+- **SKIP×2**：P0-3（条件不成立）；E2（未知 role 被 schema enum 前置拦截，运行时二道防线代码在位
+  未触发，属预期分层）。
+- 验收协议本体已存档于 docs/smoke-prompt-v2.md（v1→v2 演进：P0 环境前置门、schema 原文引用纪律、身份探针判据、F 项确定性后台生命周期、F3 信息项化）。
 
 ## B. 需用户执行（重启后生效）
 
@@ -128,8 +144,33 @@
      删除官方 control 行无必要；本插件 progress/wait 以全局层顶名，携带 bridge-aware 富数据
      （pinnedProduct / remoteSessionId）。证据文件位置：lib/drivers/bridge.js continuable 路由、
      lib/drivers/native.js L235 附近、官方 dsh-tool-subagent-control lib/index.js:57 的 followup 调用。
+- **【backlog · P2 行为缺陷，下一轮修复候选】continuable bridge relay 在自指型 prompt 下可不经
+  `subagent_submit` 转发、以 report 自答**（如回答宿主框架名），造成产品身份静默错误归因。
+  证据链（D2b，2026-08-15 22:25 窗口）：relay descriptor/persona 正确（"You are a relay bridge to
+  the Codex CLI agent. For every user message you receive, call subagent_submit…"）；工具面
+  ['report','subagent','subagent_submit'] 符合只读管道红线；relay reasoning 显示按自身系统提示
+  自答（"I'm running as DeepSeek Harness (DSH)"）；全部工具调用仅 report（seq 632/633），无
+  `subagent_submit`；佐证：窗口内无新 codex rollout、registry remoteId=—。
+  最小复现：`subagent {backend:"codex", prompt:"Which product/CLI are you running as? Reply with
+  the product name only.", run_in_background:true}`。
+  加固方向：a) relay 回合闭环校验（无 `subagent_submit` 调用的回合拒绝/标记 report——确定性）；
+  b) relay persona 增加硬性措辞（绝不谈论自身运行时、任何问题一律转发——概率性，单独不够）。
+- **【backlog · P3】subagent 工具的 backend 参数描述文案 "(none detected on this deployment)" 与
+  enum 全量（grok/codex/claude-code/acp…）矛盾**——疑描述文本与 enum 来源不同步（功能无影响）；
+  下一轮查 lib/tools/subagent.js 的 backendIds 描述构造。
+- **【backlog · P3】subagent_progress 的 trace brief 占位符**：payload 缺 turn/step 时输出
+  "turn undefined start / step undefined.undefined"（lib/progress.js compactEvent）——应改为省略
+  编号或标注缺失。
+- **INFO 备忘（设计现状，非缺陷）**：前台 bridge 调用不返回 childId、不进 list_agents —— 宿主侧
+  取证需后台模式或磁盘工件。
 
 状态：2026-08-15 真机验收通过（A1–A15；A10/A16/A17 已按「settings-UI 回弹」根因修正——A10 产物非法、A16/A17 结论推翻；A18 已在修复版副本上重做挂载验证 ✅）。
 2026-08-15 晚间追加：preset L2 挂载根因修复 + E3 lossless-JSON 修复（见「已知边界」两条目），本机
 orchestrator-subagents 副本已删除重生成；A18 经独立实例 RPC `session.create` 确认修复版真实挂载成功
 （B 节工具面运行时清单仍待用户在 GUI 新会话逐项确认）。
+2026-08-15 晚间（续）：冒烟 v2 在修复版副本上重跑完成 —— **17 PASS / 0 FAIL / 2 SKIP**（见上
+A19 + 明细小节）；此前 B 节「presetRow 相关项需在修复版副本上重跑」的待办已在修复版副本上重跑
+通过（本条目引用）。同次冒烟揭示收尾待办：continuable bridge relay 自指型 prompt 下可不经
+subagent_submit 转发、以 report 自答致产品身份错误归因（P2，下一轮修复候选）；另两条 P3 backlog
+（backend 描述文案与 enum 不同步、progress trace brief undefined 占位符）与 INFO 备忘见「已知
+边界」区。
