@@ -77,7 +77,12 @@
 3. **阴性对照（native 不受扰）**：native 子代理正常 report（无 guard 拒绝，
    progress 无 relayEpochSubmits/relayGuardFlag 键）。
 4. **开关回归（可选；判据为配置装载直证）**：`relayReportGuard: false` 的回归验证分两段，各确定性覆盖——
-   a) **装载段（patch.yml → loader，真机直证）**：在 `~/.dsh/profiles/web/cordis.patch.yml` 的 `subagents` 行 config 下加 `relayReportGuard: false` 后，`dsh --profile web --dump-config` 的合成树中 `subagents` 行 config 必须出现 `relayReportGuard: false`（YAML 缩进错误/落错层级会在此现形）；行为观察（bridge relay 的 report 不被 guard 拒、progress 仍带观测键）仅作辅助旁证——relay 转发优先的新基线下，单凭行为无法区分「开关生效」与「配置未加载」。测完删除该行并重启恢复默认。
+   a) **装载段（patch.yml → loader，真机直证）**：在 `~/.dsh/profiles/web/cordis.patch.yml` 的 `subagents` 行 config 下加 `relayReportGuard: false` 后，`dsh --profile web --dump-config` 的合成树中 `subagents` 行 config 必须出现 `relayReportGuard: false`（YAML 缩进错误/落错层级会在此现形）；行为观察（bridge relay 的 report 不被 guard 拒、progress 仍带观测键）仅作辅助旁证——relay 转发优先的新基线下，单凭行为无法区分「开关生效」与「配置未加载」。
+   > （判据已实证可执行：2026-08-16 于本机 `dsh --profile web --dump-config`
+   > EXIT=0、568 行合成树，`subagents` 行 L556-564 的 config 键——
+   > idleTimeoutMs / maxConcurrentChildren / providers.grok.*——完整穿透
+   > 合成存活；加 `relayReportGuard: false` 行后同位置出现即为装载成功。）
+   测完删除该行并重启恢复默认。
    b) **消费段（loader → 插件，套件已钉死）**：`relayReportGuard: false` 时 guard 不注册（零 contribution）、观测键保留，由 test/index.test.js 的开关分支用例覆盖，无需真机重复。
    （原「需改 profile 并重启 web，与复测会话互斥」的流程性说明保留在条目末尾。）
 5. **冷恢复两 epoch（评审追加）**：冷恢复（binding 已释放、registry 条目在）
