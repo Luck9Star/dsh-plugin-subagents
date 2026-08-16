@@ -254,15 +254,24 @@
   取证需后台模式或磁盘工件。
 - **INFO · 子代理消息分流的排查发现（2026-08-16）**：
   - **用户报告**：主会话消息队列积压大量历史子代理消息（新子代理运行中、旧消息仍在排队）。
-  - **已核实事实**（会话持久化记录实证）：宿主对 inbox 消息已带完整 origin 元数据——
-    `agent/inbox/spliced` 记录中 `source.kind` 区分 `user`（13）/`subagent-report`（46）/
-    `subagent-settled`（35）/`advisor`（57）/`plugin`/`goal`/`agent-instructions`，
-    子代理回传与人工消息在数据层泾渭分明。
-  - **定性**：消息分流（分组渲染「子代理动态」插话流）是 **dsh-web-ui 前端纯渲染变更**，
-    无需宿主模型改造；积压本质是子代理结算速度 > 主代理 turn 消费速度，前端分组 + 按 childId
-    聚合 + 已读折叠可先行缓解，彻底解法涉及宿主 inbox 策略（超出本插件边界，settlement 投递
-    是 harness 代码）。
+  - **核实结论——持久化记录实测，运行时队列健康**：会话全生命周期累计拼接（splice）的
+    subagent 相关消息共 **83 条**（subagent-report 46 + subagent-settled 35 + 其他 2），
+    但最后一条 subagent splice（seq 277279）**早于**最后一个 step/start（seq 278316），
+    当前队列深度为 **0**——全部已被 462 个 turn 消费。「大量历史子代理消息仍在排队」是
+    **GUI 呈现层现象**（已消费的 splice 历史仍以排队/时间线形态渲染），而非运行时积压。
+  - **已核实事实（会话生命周期累计口径）**（会话持久化记录实证）：宿主对 inbox 消息已带
+    完整 origin 元数据——`agent/inbox/spliced` 记录中 `source.kind` 区分 **会话生命周期累计**
+    `user`（13）/`subagent-report`（46）/`subagent-settled`（35）/`advisor`（57）/
+    `plugin`/`goal`/`agent-instructions`，子代理回传与人工消息在数据层泾渭分明。（以上均为
+    累计计数，非「仍在排队」的实时深度；排队深度以 splice seq vs 最后 step/start seq 比较测得，
+    见上核实结论。）
+  - **定性**：消息分流（分组渲染「子代理动态」插话流）仍是 **dsh-web-ui 前端纯渲染变更**
+    （按 source.kind 分组、按 childId 聚合、已消费项折叠）；且因运行时队列已排空，issue 的
+    核心诉求从「积压治理」修正为「**已消费的子代理消息在 UI 中持续以排队形态呈现**」——
+    数据层无需宿主改动。
   - **状态**：待向 dsh-web-ui / dsh 宿主提功能请求（issue 草稿另出）。
+  - **口径备注**：issue 草稿引用以上数据时，需注明「累计口径」并给出测量方法——以 splice seq
+    与最后 step/start seq 的比较判断排队深度，勿把累计计数误读为实时排队积压。
 
 状态：2026-08-15 真机验收通过（A1–A15；A10/A16/A17 已按「settings-UI 回弹」根因修正——A10 产物非法、A16/A17 结论推翻；A18 已在修复版副本上重做挂载验证 ✅）。
 2026-08-15 晚间追加：preset L2 挂载根因修复 + E3 lossless-JSON 修复（见「已知边界」两条目），本机
