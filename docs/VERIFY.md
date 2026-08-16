@@ -120,6 +120,24 @@
    - **registry 佐证**：本次条目 `backend=codex`、`remoteId=01a00906-…`（与 rollout 文件名、`subagent_progress` remoteSessionId 三方一致）；旁证——registry 中两条修复前 codex 旧条目（ff027c1e、1c4133d2）remoteId 为空，即修复前缺陷历史痕迹。
 3. **结论行**：D2b 修复真机验证通过——转发优先、epoch 计数归零、registry 冷恢复链路完整；5b/4 为后续可选项（非缺陷）。
 
+### B3. claude-code 桥端到端补验（2026-08-16 14:03–14:07）
+
+- **前台 one-shot**：`subagent {backend:"claude-code", prompt:"Reply with exactly
+  one line, the product/CLI you are running as…"}` → 回答 `general-purpose agent`
+  （claude 按自身 system prompt 解读身份问题——真实远端回答，relay 自答会说宿主框架名）；
+  磁盘证据 `~/.claude/projects/-Users-yangyitian-Documents-dev-Agents-dsh/88906cf9-….jsonl`
+  （14 行，14:03 窗口，user 探针原文 + assistant 回答）。
+- **后台 continuable**：`subagent {backend:"claude-code", …,
+  run_in_background:true}`（childId `d432c98b-8390-4d45-b757-093b53a7b61d`）→
+  `subagent_wait` 返回 `{status:completed, stopReason:completed,
+  answer:"Claude Code"}`；三方一致：registry 条目 `backend=claude-code,
+  remoteId=10f0c2ef-…, permissionMode:full` ↔ 磁盘 transcript
+  `10f0c2ef-….jsonl`（119735 bytes，14:07:26，探针原文 ×5）↔ wait answer。
+  relay 转发链（guard/persona/观测键）同 codex/grok 管道。
+- **结论**：**四个 bridge 后端全部真机端到端验证完成**（codex CLI-JSONL、grok ACP、
+  claude-code CLI、通用 ACP 入口），A 节 claude-code「available 未实测」状态更新为
+  已实测通过。
+
 ## C. 已知边界
 
 > 补充说明：A13/A14 两条冒烟是 bridge 层**直连**真实 agent 的协议级端到端
@@ -234,6 +252,17 @@
   原样，回归用例钉死）。
 - **INFO 备忘（设计现状，非缺陷）**：前台 bridge 调用不返回 childId、不进 list_agents —— 宿主侧
   取证需后台模式或磁盘工件。
+- **INFO · 子代理消息分流的排查发现（2026-08-16）**：
+  - **用户报告**：主会话消息队列积压大量历史子代理消息（新子代理运行中、旧消息仍在排队）。
+  - **已核实事实**（会话持久化记录实证）：宿主对 inbox 消息已带完整 origin 元数据——
+    `agent/inbox/spliced` 记录中 `source.kind` 区分 `user`（13）/`subagent-report`（46）/
+    `subagent-settled`（35）/`advisor`（57）/`plugin`/`goal`/`agent-instructions`，
+    子代理回传与人工消息在数据层泾渭分明。
+  - **定性**：消息分流（分组渲染「子代理动态」插话流）是 **dsh-web-ui 前端纯渲染变更**，
+    无需宿主模型改造；积压本质是子代理结算速度 > 主代理 turn 消费速度，前端分组 + 按 childId
+    聚合 + 已读折叠可先行缓解，彻底解法涉及宿主 inbox 策略（超出本插件边界，settlement 投递
+    是 harness 代码）。
+  - **状态**：待向 dsh-web-ui / dsh 宿主提功能请求（issue 草稿另出）。
 
 状态：2026-08-15 真机验收通过（A1–A15；A10/A16/A17 已按「settings-UI 回弹」根因修正——A10 产物非法、A16/A17 结论推翻；A18 已在修复版副本上重做挂载验证 ✅）。
 2026-08-15 晚间追加：preset L2 挂载根因修复 + E3 lossless-JSON 修复（见「已知边界」两条目），本机
