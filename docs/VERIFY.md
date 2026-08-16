@@ -90,8 +90,8 @@
    - b) **重启后恢复**：重启 dsh（web），`send_message` 唤醒 registry 记录的
      该子代理（registry 是唯一恢复源），重发自指型探针，判据同上（a）。
    > 该场景已由 live-root probe 复证（2026-08-15，修复后；脚本
-   > `/tmp/d2b-live-root-probe.mjs`，输出 `/tmp/d2b-live-root-probe.output.txt`，
-   > 22 PASS / 0 FAIL）：真实 `SubagentActivationSetupRegistry`（自 live
+   > `scripts/d2b-live-root-probe.mjs`，运行本脚本可随时再生（一次性
+   > stdout），期望 22 PASS / 0 FAIL）：真实 `SubagentActivationSetupRegistry`（自 live
    > root 逐字提取，锚点校验）+ 本仓真实
    > `createBridgeState`/`attachBridgeLifecycle`/`attachRelayGuard`——两
    > epoch 冷恢复场景中 epoch2 计数归零（binding ∪ registry 并集）、零
@@ -100,7 +100,8 @@
    > function disposer、调用后 guard 失效，contribution 移除路径
    > （releaseAll → installation.dispose()）不再抛
    > "installation.dispose is not a function"（含 undefined-returning
-   > installer 的灵敏度阴性对照）。probe 脚本为一次性 /tmp 产物，未入仓。
+   > installer 的灵敏度阴性对照）。probe（`scripts/d2b-live-root-probe.mjs`）
+   > 为仓库内持久路径，可重复执行；输出为一次性 stdout，如需留存可用 tee。
 6. **磁盘/registry 佐证**：registry 条目 `backend=codex` 的 remoteId 非空。
 
 ## C. 已知边界
