@@ -73,6 +73,39 @@ test('foldTrace labels subagent_submit calls with the matched name', () => {
   assert.match(trace[0].brief, /^subagent_submit:/)
 })
 
+test('compactEvent: payloads missing turn/step numbers degrade to unnumbered briefs (no "undefined")', () => {
+  const now = Date.now()
+  const session = { events: events([
+    { type: 'turn/start', timestamp: now, payload: {} },
+    { type: 'turn/end', timestamp: now, payload: {} },
+    { type: 'step/start', timestamp: now, payload: {} },
+    { type: 'step/start', timestamp: now, payload: { step: 2 } },
+    { type: 'step/start', timestamp: now, payload: { turn: 'x' } },
+  ]) }
+  const trace = foldTrace(session, 10)
+  assert.deepEqual(trace.map((t) => t.brief), [
+    'turn start',
+    'turn end',
+    'step start',
+    'step start', // step without a numeric turn → unnumbered
+    'step start', // non-numeric turn → unnumbered
+  ])
+  for (const entry of trace) {
+    assert.ok(!entry.brief.includes('undefined'), `brief must not contain "undefined": ${entry.brief}`)
+  }
+})
+
+test('compactEvent: fully numbered payloads keep the historical wording (regression)', () => {
+  const now = Date.now()
+  const session = { events: events([
+    { type: 'turn/start', timestamp: now, payload: { turn: 3 } },
+    { type: 'step/start', timestamp: now, payload: { turn: 3, step: 4 } },
+    { type: 'turn/end', timestamp: now, payload: { turn: 3 } },
+  ]) }
+  const trace = foldTrace(session, 10)
+  assert.deepEqual(trace.map((t) => t.brief), ['turn 3 start', 'step 3.4', 'turn 3 end'])
+})
+
 test('foldTokenUsage sums input/output/cache tokens', () => {
   const session = { events: events([
     { type: 'assistant/message', payload: { message: { usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 100 } } } },

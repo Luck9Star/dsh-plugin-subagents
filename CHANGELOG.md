@@ -154,6 +154,23 @@ takes over the official `subagent` / `subagent_fork` tool names.
 
 ### Fixed
 
+- Fixed the `subagent` tool's `backend` parameter description contradicting
+  its own enum on bridge-less rows (P3). The single fallback wording —
+  "a bridge name (none detected on this deployment)" — also fired for
+  `presetRow` rows, lying about the deployment (bridges ARE detected; the
+  row is simply native-only by design). The description is now three-state:
+  detected bridges are listed; a bridge-less presetRow row says the tool is
+  native-only and points at the global `subagent` tool's `backend`
+  parameter; a bridge-less global instance honestly says no external agent
+  CLI is currently detected (pointing at `subagent_agents`). A consistency
+  invariant is pinned by tests: with bridges present every enum bridge name
+  appears in the description, and the misleading "(none detected…)" wording
+  never appears.
+- Fixed `subagent_progress` traces printing `"turn undefined start"` /
+  `"step undefined.undefined"` when a session event payload carries no
+  turn/step numbers (P3) — the brief now degrades to `turn start` / `turn
+  end` / `step start`; fully numbered payloads keep the historical
+  `turn N start` / `step N.M` wording (regression-pinned).
 - Fixed bridge relay children silently self-answering instead of forwarding
   (2026-08-15 smoke D2b). A continuable relay asked a self-referential
   question ("which product/CLI are you running as?") answered from its own

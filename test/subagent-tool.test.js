@@ -680,6 +680,53 @@ test('registers under deps.toolName (default subagent) and the backend enum list
   assert.deepEqual(ctxNamed.tool('delegate_task').parameters.properties.backend.enum, ['native'])
 })
 
+// ---- P3：backend 描述三态 + enum/description 一致性不变式 ----
+
+test('backend description: three states, and the description never contradicts the enum', () => {
+  // ① bridges detected → every enum bridge name appears in the description
+  const withBridge = fakeAssembled({ native: fakeNativeDriver(), bridge: fakeBridgeDriver() }).assembled
+  const ctxBridge = fakeCtx()
+  registerSubagentTool(ctxBridge, { assembled: withBridge, roles: fakeRoles({ general: GENERAL }), config: {} })
+  const descBridge = ctxBridge.tool('subagent').parameters.properties.backend.description
+  const enumBridge = ctxBridge.tool('subagent').parameters.properties.backend.enum
+  for (const name of enumBridge.slice(1)) {
+    assert.ok(descBridge.includes(name), `enum bridge "${name}" appears in the description`)
+  }
+  assert.ok(!descBridge.includes('none detected'), 'no "none detected" wording while bridges exist')
+  assert.ok(!descBridge.includes('native-only'), 'no presetRow wording on the global instance')
+
+  // ② presetRow row with zero bridges → native-only wording pointing at the global tool
+  const ctxPreset = fakeCtx()
+  registerSubagentTool(ctxPreset, {
+    assembled: fakeAssembled({ native: fakeNativeDriver() }).assembled,
+    roles: fakeRoles({ general: GENERAL }),
+    config: { presetRow: true },
+    toolName: 'plan_agent',
+  })
+  const descPreset = ctxPreset.tool('plan_agent').parameters.properties.backend.description
+  assert.match(descPreset, /this tool is native-only/)
+  assert.match(descPreset, /global "subagent" tool's backend parameter/)
+  assert.ok(!descPreset.includes('none detected'), 'presetRow rows never claim a detection failure')
+
+  // ③ global instance with zero detected bridges → honest "not detected" wording
+  const ctxEmpty = fakeCtx()
+  registerSubagentTool(ctxEmpty, {
+    assembled: fakeAssembled({ native: fakeNativeDriver() }).assembled,
+    roles: fakeRoles({ general: GENERAL }),
+    config: {},
+  })
+  const descEmpty = ctxEmpty.tool('subagent').parameters.properties.backend.description
+  assert.match(descEmpty, /no external agent CLI is currently detected on this deployment/)
+  assert.match(descEmpty, /backend stays "native"/)
+  assert.match(descEmpty, /subagent_agents/)
+
+  // invariant across all three: the description names every enum bridge and
+  // "native" stays the documented default
+  for (const desc of [descBridge, descPreset, descEmpty]) {
+    assert.match(desc, /"native" \(default\)/)
+  }
+})
+
 test('bridge backend that is not available throws with its reason', async () => {
   const bridge = fakeBridgeDriver({ registered: false, reason: 'codex CLI not found on PATH' })
   const { assembled } = fakeAssembled({ native: fakeNativeDriver(), bridge })
