@@ -183,6 +183,14 @@ P5 质量与发布    T19 T20 T21                  （依赖全部）
 - **验收**：dry-run 列表只含预期文件；version 0.1.0；CHANGELOG 就位。
 - **依赖**：T20。
 
+### T22 引擎级 dispatch 缝
+> **2026-08-16 定稿**（设计唯一权威：`docs/dispatch-seam.md`；状态：已实施）。
+
+- **目标**：插件代码（非模型工具调用）可以受控 permissionMode 程序化派发 bridge 后端任务 —— `ctx.provide('subagentsDispatch', { dispatchAgentTask, available, backends })`。目标消费方 dsh-dag-orchestrator（其 DESIGN §4.3-O2 拍板行）按此缝定型。
+- **范围/文件**：`lib/dispatch.js`（新建：`createDispatchSeam` + 自工具层抽出的共用函数 `resolveBridgePermissionMode` / `buildBridgeSettings` / `assertCallerWithinCeiling`）、`lib/index.js`（全局实例 attachAll 后一行 provide）、`lib/config.js`（全量分支 `maxDispatchPermissionMode` 键，presetRow 不加 —— 红线 9）、`lib/tools/subagent.js`（共用函数 import 改造，行为零变化）、`lib/drivers/bridge.js`（sync 路由 `request.cwd` 可选透传）+ `lib/drivers/types.js`（DelegateRequest JSDoc）、`test/dispatch.test.js`（§6.2 矩阵 11 组）、`test/index.test.js`（provide 接线 3 例）、双语 README + CHANGELOG。
+- **验收**：§6.2 测试矩阵全绿（settings 穿透 / ceiling / config cap 两道闸 / registry 零写入 / 并发槽占与释放 / backend 校验与 native 重定向 / role / cwd / signal 失败路径 / 参数白名单 / enum 加固）；`npm run lint` 过（dispatch.js 无 `@deepseek-ai/*` import）；既有 407 例零改动全绿（共用函数抽取不改变工具行为的证明）；one-shot 零 registry 写入；seam 占并发槽（合成键 `dispatch:<seq>`）。
+- **依赖**：T14。
+
 ---
 
 ## 任务依赖速查
@@ -206,6 +214,7 @@ P5 质量与发布    T19 T20 T21                  （依赖全部）
 | T19 | T18 |
 | T20 | T14 |
 | T21 | T20 |
+| T22 | T14 |
 
 ## 建议派发批次
 
@@ -214,3 +223,4 @@ P5 质量与发布    T19 T20 T21                  （依赖全部）
 3. **批 3**：T11 →（T12/T13 并行）→ T14。
 4. **批 4**：T15 →（T16/T17 并行）→ T18。
 5. **批 5**：T19（真机）、T20、T21。
+6. **批 6**：T22（引擎级 dispatch 缝，2026-08-16 追加；依赖 T14 已就绪，独立于 P5）。

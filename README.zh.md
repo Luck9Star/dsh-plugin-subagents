@@ -163,6 +163,7 @@ bridge（自前身全量保留）：
 | `maxConcurrentChildren` | 正整数 | `8` | 正有一轮任务在跑的 bridge 可续续子代理上限（native 后台走 harness jobs，不占名额） |
 | `relayReportGuard` | boolean | `true` | D2b 回合闭环校验：relay 子代理本回合未调 `subagent_submit` 就 report 时拒绝该调用（模型收到纠正性错误后仍可转发再 report）；`false` 恢复不校验的旧行为 |
 | `redactSecrets` | boolean | `true` | 对捕获的 CLI stdout/stderr 与各 bridge 返回的最终文本脱敏（Bearer token、`sk-` 密钥、GitHub PAT、`api_key=` 赋值、JWT 五种形态）；`false` 恢复字节精确透传，供确有需要的部署使用 |
+| `maxDispatchPermissionMode` | `'readonly' \| 'default' \| 'full'` | `'full'` | 引擎级派发缝（`ctx.get('subagentsDispatch')`，见下节）的 permissionMode 部署上限：程序化 bridge 派发请求更高档位时大声拒绝、绝不静默降级。缺省 `full` 与工具面 root 调用者对齐（真正的边界是委派天花板）；设 `readonly` 即让缝只剩只读派发 |
 | `rolesDir` | string | 包内 `roles/` | 角色库目录 |
 
 迁移：
@@ -206,6 +207,66 @@ bridge（自前身全量保留）：
 | `codex-full` | codex | full | true | bridge 示例：全权 codex |
 | `claude-readonly` | claude-code | readonly | false | bridge 示例：plan 模式审查 |
 | `grok-native-full` | grok-native | full | true | bridge 示例：全权 grok（原生 streaming-json 桥） |
+
+## 引擎级派发缝（Engine-level dispatch seam）
+
+除模型面工具外，全局实例还提供一条**引擎级程序化派发缝**：让插件代码（非模型
+工具调用）以受控 `permissionMode` 派发 bridge 任务 —— 这正是官方
+`ctx.subagents.start` 通道结构性做不到的事（其 `SubagentStartRequest` 没有
+settings 概念；`permissionMode` / `reasoningEffort` 只随本插件的 bridge
+settings 通道流动）：
+
+```js
+const dispatch = ctx.get('subagentsDispatch')
+if (dispatch?.available) {
+  const outcome = await dispatch.dispatchAgentTask({
+    backend: 'codex',                       // 必填：bridge provider 名
+    task: 'Review the diff and report.',    // 必填：自包含任务文本
+    parent: exec.agent,                     // 必填：委派父 live Agent
+    label: 'review node',                   // 可选：展示标签（回显）
+    role: 'codex-full',                     // 可选：角色 id（无缺省角色）
+    settings: {                             // 可选：远端设置
+      permissionMode: 'readonly',           //   显式 > role.permissionMode > 'default'
+      model: 'gpt-5-codex',                 //   直通
+      reasoningEffort: 'high',              //   直通
+    },
+    cwd: '/abs/worktree',                   // 可选：绝对路径远端 cwd（缺省 parentCwd(parent)）
+    signal: controller.signal,              // 可选：取消信号（贯穿任务提交 submit）
+  })
+  // → { backend, runId, label?, text, stopReason }
+}
+```
+
+本缝**bridge 专精、one-shot**（`create → submit(settings) → dispose`，await
+到终态；零 registry/binding 写入 —— 已 dispose 的远端没有恢复语义）。
+`backend: 'native' | 'spawn' | 'fork'` 被大声拒绝并重定向到官方
+`ctx.subagents.start`；缝不 wrap、不替换官方服务。`available` 表示是否至少
+装配成功一个 bridge driver；`backends()` 列出它们的名字。native 专属参数
+（`persona` / `toolFilter` / `maxDepth` / `provider` / `outputSchema` /
+`maxTokens`）按名拒绝。
+
+每次派发都过**两道权限闸**（都 loud，绝不静默降级）：
+
+1. **委派天花板** —— 以 `parent` 查活 binding ∪ 持久 registry（与
+   `subagent` 工具同一并集）：bridge 子代理（如 readonly）经任何插件之手
+   派发都抬不了自己的权限；未知存量档位 fail closed 到 `readonly`。
+2. **部署上限** —— `maxDispatchPermissionMode`（缺省 `full`）封顶整条缝
+   可请求的档位。
+
+派发还**占并发槽**：与可续续 bridge 子代理共用同一只 `maxConcurrentChildren`
+池（合成键 `dispatch:*`，全程持有、必然释放），in-flight 派发与 continuable
+子代理同受这只 cap 计数治理。注意合成键不是 harness 会话：它不会出现在
+`subagent_agents` 的 children 列表里（该列表来自 `ctx.subagents.listChildren`）
+—— in-flight 派发只能经由它占住的池被间接感知。
+
+**Orchestrator 集成注记**：把本缝与编排器自身的并发准入（如
+`maxRunningAgents`）组合时，实际 bridge 并发是两者的 **min** —— 请配置
+`maxConcurrentChildren ≥ maxRunningAgents`。本缝**无内置超时**：取消靠调用方
+的 `signal`（abort 后 bridge 以 `stopReason: 'aborted'` 结算）。bridge
+one-shot 没有 `outputSchema` 概念，bridge 任务上不要声明结构化 `outputs`。
+缝只由全局实例 provide；仅装 presetRow 行的部署里
+`ctx.get('subagentsDispatch')` 恒为 undefined（无状态，红线 10）。完整设计
+记录见 [docs/dispatch-seam.md](docs/dispatch-seam.md)。
 
 ## 升级 dsh / npx 缓存漂移
 

@@ -62,6 +62,7 @@ function fakeCtx({ registered = ['spawn', 'fork'], toolHost } = {}) {
   const teardowns = []
   const continuableContributions = []
   const logs = { fatal: [], warn: [] }
+  const provides = new Map()
   return {
     tools: toolHost ?? {
       register: (tool) => { tools.set(tool.name, tool) },
@@ -93,7 +94,11 @@ function fakeCtx({ registered = ['spawn', 'fork'], toolHost } = {}) {
       listeners.set(event, list)
     },
     effect: (fn) => { teardowns.push(fn()) },
-    get: () => undefined,
+    // Cordis-like provide/get pair: `get` resolves ONLY provided names (any
+    // other name stays undefined — the same result every existing caller of
+    // the always-undefined stub observed, so their behavior is unchanged).
+    provide: (name, value) => { provides.set(name, value) },
+    get: (name) => provides.get(name),
     logger: {
       fatal: (message) => { logs.fatal.push(message) },
       warn: (message) => { logs.warn.push(message) },
@@ -104,6 +109,7 @@ function fakeCtx({ registered = ['spawn', 'fork'], toolHost } = {}) {
     __logs: logs,
     __listeners: listeners,
     __continuableContributions: continuableContributions,
+    __provides: provides,
   }
 }
 
@@ -252,6 +258,51 @@ test('presetRow standalone: exactly one tool, zero providers, no auxiliaries, no
   assert.equal(ctx.__teardowns.length, 0, 'presetRow holds no bridge state → no teardown')
   assert.equal(existsSync(join(dir, 'product-subagents-registry.migrated')), false, 'no migration marker')
   assert.equal(existsSync(legacyPath), true, 'legacy file untouched')
+})
+
+// ---- 引擎级 dispatch 缝 provide（T22） ----
+
+test('dispatch seam: default global apply provides subagentsDispatch with the right shape', async (t) => {
+  const { dir, done } = tempDir()
+  shim(dir, 'codex-cli')
+  t.after(done)
+  const ctx = fakeCtx()
+  await apply(ctx, shimmedConfig(dir), { legacyRegistryPath: absentLegacy(dir) })
+
+  const seam = ctx.get('subagentsDispatch')
+  assert.notEqual(seam, undefined, 'the global instance provides the seam')
+  assert.equal(typeof seam.dispatchAgentTask, 'function')
+  assert.equal(typeof seam.backends, 'function')
+  assert.equal(typeof seam.available, 'boolean')
+  // the shimmed codex bridge is availability-detected → listed as a backend
+  assert.deepEqual(seam.backends(), ['codex'])
+  assert.equal(seam.available, true)
+})
+
+test('dispatch seam: the presetRow branch never provides it (stateless, red line 10)', async (t) => {
+  const { dir, done } = tempDir()
+  t.after(done)
+  const ctx = fakeCtx()
+  await apply(ctx, { presetRow: true, provider: 'spawn', toolName: 'scout_agent' }, { legacyRegistryPath: absentLegacy(dir) })
+  assert.equal(ctx.get('subagentsDispatch'), undefined, 'a presetRow instance holds no bridge state → no seam')
+})
+
+test('dispatch seam: a global apply with zero detected bridges still provides a seam (available: false)', async (t) => {
+  const { dir, done } = tempDir()
+  t.after(done)
+  const ctx = fakeCtx()
+  // Seal every built-in provider command to absent paths (the same trick
+  // shimmedConfig uses, minus the shim) so detection is deterministically
+  // empty regardless of what this host really has on PATH.
+  await apply(
+    ctx,
+    shimmedConfig(dir, { providers: { codex: { command: join(dir, 'absent-codex') }, 'claude-code': { command: join(dir, 'absent-claude') }, acp: { command: join(dir, 'absent-acp') }, 'grok-native': { command: join(dir, 'absent-grok') } } }),
+    { legacyRegistryPath: absentLegacy(dir) },
+  )
+  const seam = ctx.get('subagentsDispatch')
+  assert.notEqual(seam, undefined, 'the seam exists even with no bridge detected — existence reflects governance state, not detection')
+  assert.equal(seam.available, false)
+  assert.deepEqual(seam.backends(), [])
 })
 
 // ---- relay 回合闭环 guard 挂载（D2b） ----

@@ -267,6 +267,7 @@ Bridge (inherited from the predecessor in full):
 | `maxConcurrentChildren` | positive integer | `8` | cap on bridge continuable children with a turn in flight (native background runs go through harness jobs and are not counted) |
 | `relayReportGuard` | boolean | `true` | D2b turn-closure guard: reject a bridge relay's `report` call when the current turn has no `subagent_submit` call (the relay model then gets a corrective error and can forward + report). `false` restores the unguarded behavior |
 | `redactSecrets` | boolean | `true` | scrub common secret shapes (Bearer tokens, `sk-` keys, GitHub PATs, `api_key=` assignments, JWTs) from captured CLI stdout/stderr and from every bridge's final text. `false` restores byte-exact passthrough for deployments that need it |
+| `maxDispatchPermissionMode` | `'readonly' \| 'default' \| 'full'` | `'full'` | deployment cap on the engine-level dispatch seam (`ctx.get('subagentsDispatch')`, see below): a programmatic bridge dispatch requesting a higher permission mode is rejected loudly, never silently downgraded. Default `full` aligns with the tool surface for root callers (the real boundary is the delegation ceiling); set `readonly` to leave the seam read-only dispatches only |
 | `rolesDir` | string | the package's `roles/` | role library directory |
 
 Migration:
@@ -326,6 +327,75 @@ Default role set:
 | `codex-full` | codex | full | true | bridge example: full-permission codex |
 | `claude-readonly` | claude-code | readonly | false | bridge example: plan-mode review |
 | `grok-native-full` | grok-native | full | true | bridge example: full-permission grok (native streaming-json bridge) |
+
+## Engine-level dispatch seam
+
+Besides the model-facing tools, the global instance provides an
+**engine-level programmatic dispatch seam** for plugin code (not model tool
+calls) that needs to dispatch a bridge task with a controlled
+`permissionMode` — the thing the official `ctx.subagents.start` channel
+structurally cannot do (its `SubagentStartRequest` has no settings concept;
+`permissionMode` / `reasoningEffort` only flow through this plugin's bridge
+settings channel):
+
+```js
+const dispatch = ctx.get('subagentsDispatch')
+if (dispatch?.available) {
+  const outcome = await dispatch.dispatchAgentTask({
+    backend: 'codex',                       // required: a bridge provider name
+    task: 'Review the diff and report.',    // required: self-contained task text
+    parent: exec.agent,                     // required: delegating live Agent
+    label: 'review node',                   // optional: display label (echoed)
+    role: 'codex-full',                     // optional: role id (no default role)
+    settings: {                             // optional: remote settings
+      permissionMode: 'readonly',           //   explicit > role.permissionMode > 'default'
+      model: 'gpt-5-codex',                 //   passthrough
+      reasoningEffort: 'high',              //   passthrough
+    },
+    cwd: '/abs/worktree',                   // optional: absolute remote cwd (default parentCwd(parent))
+    signal: controller.signal,              // optional: cancellation (threads through submit)
+  })
+  // → { backend, runId, label?, text, stopReason }
+}
+```
+
+The seam is **bridge-only and one-shot** (`create → submit(settings) →
+dispose`, awaited to completion; no registry/binding writes — a disposed
+remote has no recovery semantics). `backend: 'native' | 'spawn' | 'fork'` is
+rejected loudly with a redirect to the official `ctx.subagents.start`; the
+seam never wraps or replaces the official service. `available` reports
+whether at least one bridge driver assembled; `backends()` lists their
+names. Native-only parameters (`persona` / `toolFilter` / `maxDepth` /
+`provider` / `outputSchema` / `maxTokens`) are rejected by name.
+
+Every dispatch passes **two permission gates** (both loud, never a silent
+downgrade):
+
+1. **Delegation ceiling** — the `parent` is checked against the live
+   bindings ∪ durable registry (same union the `subagent` tool uses): a
+   bridge child (e.g. readonly) dispatching through any plugin cannot raise
+   its own permission. Unknown stored modes fail closed to `readonly`.
+2. **Deployment cap** — `maxDispatchPermissionMode` (default `full`)
+   bounds what the seam may request at all.
+
+Dispatches also **consume a concurrency slot** in the same
+`maxConcurrentChildren` pool as continuable bridge children (a synthetic
+`dispatch:*` key, held for the duration and always released), so in-flight
+dispatches count against the same cap. Note they are not harness sessions:
+they never appear in `subagent_agents`'s children list (that list comes from
+`ctx.subagents.listChildren`) — an in-flight dispatch is observable only
+indirectly, through the pool it occupies.
+
+**Orchestrator integration notes**: when combining this seam with an
+orchestrator's own concurrency admission (e.g. `maxRunningAgents`), the
+effective bridge concurrency is the *minimum* of the two — configure
+`maxConcurrentChildren ≥ maxRunningAgents`. The seam has **no built-in
+timeout**: cancellation is the caller's `signal` (the bridge settles with
+`stopReason: 'aborted'` on abort). Bridge one-shots have no `outputSchema`
+concept, so do not declare structured `outputs` on bridge tasks. Only the
+global instance provides the seam; a preset-row-only deployment keeps
+`ctx.get('subagentsDispatch')` undefined (stateless, red line 10). See
+[docs/dispatch-seam.md](docs/dispatch-seam.md) for the full design record.
 
 ## Upgrading dsh / npx cache drift
 

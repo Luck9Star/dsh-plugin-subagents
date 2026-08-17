@@ -14,6 +14,70 @@ takes over the official `subagent` / `subagent_fork` tool names.
 
 ### Added
 
+**Engine-level dispatch seam (bridge programmatic dispatch)**
+
+- New `lib/dispatch.js` + `ctx.provide('subagentsDispatch', { dispatchAgentTask,
+  available, backends })`: plugin code (not model tool calls) can now
+  dispatch a **bridge** task one-shot with a controlled `permissionMode` —
+  the capability the official `ctx.subagents.start` channel structurally
+  lacks (no settings concept in `SubagentStartRequest`). Design record:
+  [docs/dispatch-seam.md](docs/dispatch-seam.md) (T22).
+- `dispatchAgentTask({ backend, task, parent, label?, role?, settings?, cwd?,
+  signal? })` runs the full driver sync route (create → submit(settings) →
+  dispose), flattens the outcome to `{ backend, runId, label?, text,
+  stopReason }`, and writes **nothing** to the registry/bindings (a disposed
+  one-shot remote has no recovery semantics). Native-only parameters
+  (`persona` / `toolFilter` / `maxDepth` / `provider` / `outputSchema` /
+  `maxTokens`) and unknown keys are rejected loudly by name — including all
+  three `Object.keys` bypass faces (review F-8; red line 8): symbol-keyed
+  properties (via a `getOwnPropertySymbols` check), custom-prototype
+  requests whose INHERITED keys would slip past the whitelist enumeration
+  and then be actually consumed by prototype-chain destructuring (a plain
+  object is required; `Object.create(null)` passes — it has no inherited
+  keys), and a polluted `Object.prototype` (assignment-style pollution from
+  a buggy merge/deepClone yields enumerable keys; every dispatch fails
+  closed while the pollution persists); illegal
+  `permissionMode` / `reasoningEffort` enums fail closed (no schema surface
+  to lean on).
+- Two permission gates on every dispatch, both loud, never a silent
+  downgrade: the delegation ceiling over `parent` (live bindings ∪ durable
+  registry — a readonly bridge child cannot raise its own permission through
+  any plugin) and the new deployment cap `maxDispatchPermissionMode`
+  (default `full`, full schema branch only).
+- Dispatches consume a concurrency slot in the shared
+  `maxConcurrentChildren` pool (synthetic `dispatch:*` key, always released)
+  — unlike the tool layer's sync route, code callers have no bounded turn,
+  so the pool is the governance. The synthetic key is not a harness session:
+  it never shows up in `subagent_agents`'s children list (that list comes
+  from `ctx.subagents.listChildren`); an in-flight dispatch is observable
+  only indirectly, through the pool it occupies.
+- The seam's optional `cwd` is its one deliberate extension over the tool
+  surface (absolute path, `assertCwd`-validated; default `parentCwd(parent)`):
+  orchestration parents drift across sessions while a task's workspace is
+  per-task. Plumbs through `DelegateRequest.cwd` on the bridge driver's sync
+  route (the tool layer never sets it — capability matrix bridge cwd ❌ is
+  unchanged).
+- Shared helpers (`resolveBridgePermissionMode` / `buildBridgeSettings` /
+  `assertCallerWithinCeiling`) extracted from the `subagent` tool into
+  `lib/dispatch.js` and re-imported: tool behavior, validation order, and
+  error wording are byte-for-byte unchanged (the existing tool tests pass
+  untouched).
+- Only the global instance provides the seam; preset-row deployments keep
+  `ctx.get('subagentsDispatch')` undefined (stateless, red line 10).
+  `backend: 'native' | 'spawn' | 'fork'` is rejected with a redirect to the
+  official channel — the seam is bridge-only by design.
+- Security hardening found in review (back-ported into the shared ceiling):
+  `lib/ceiling.js`'s `PERM_RANK[mode] ?? fallback` lookups were fail-open on
+  prototype keys — a stored `permissionMode` of `'toString'` /
+  `'constructor'` resolved to an inherited *function*, so the `??` never
+  fired and the numeric comparison became NaN (always false), silently
+  lifting the ceiling. Both lookups now guard with an own-key
+  (`hasOwnProperty`) check: legal values and unknown strings behave exactly
+  as before (caller side still fails closed to rank 0, requested side keeps
+  unknown-as-default rank 1); inherited keys are closed. The dispatch seam's
+  `maxDispatchPermissionMode` cap check uses the closed `PERMISSION_MODES`
+  array for the same reason.
+
 **Output redaction (task-weaver port)**
 
 - New `lib/redact.js`: five common secret shapes (Bearer headers, `sk-…`
