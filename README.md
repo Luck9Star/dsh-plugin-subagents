@@ -405,8 +405,12 @@ cleaned, the live root **silently switches** — the old root (with its cwd
 patches) is abandoned with no error, and the `dsh-tools` symlinks go dangling.
 Two symptoms (DESIGN §6.4.5):
 
-1. **Per-call `cwd` silently stops working** — children fall back to the
-   parent session's cwd (the patches in the old root are dead).
+1. **Per-call `cwd` fails loudly (formerly silent breakage)** — after the old
+   root (with its cwd patches) is abandoned, the `liveRoot` recorded in
+   `patches/.applied` no longer matches the current root, and the native
+   driver's stamp gate throws with both paths and the repair guidance
+   (instead of letting an unpatched harness silently drop the `cwd` field,
+   run the child in the parent's cwd, and record the task as successful).
 2. **Every tool call fails** with
    `Cannot read properties of undefined (reading 'prepare')` — the dangling
    `dsh-tools` links resolve to a second module instance.
@@ -424,6 +428,16 @@ the same list:
 Preset copies under `~/.dsh` are not affected by a root switch. The installer
 resolves the live root dynamically (`which dsh` → realpath → walk up to
 `node_modules`; `DSH_HARNESS_ROOT` overrides) — it never hardcodes cache paths.
+
+The stamp gate performs the same dynamic check on its own: `patches/.applied`
+only proves anything about the one live root it names, so before the native
+driver releases `cwd` it compares the stamp's `liveRoot` against the CURRENT
+root — resolved JS-side with the same logic as `resolve-root.sh` (walk up
+from the realpath of the `@deepseek-ai/dsh-tools` peer this plugin actually
+links to, to the enclosing `node_modules` parent). A foreign stamp (formerly
+shipped inside the npm tarball — now excluded from the files whitelist), a
+pre-drift stamp after an npx cache switch, or a stamp missing its `liveRoot`
+record all fail loudly with a pointer to re-run `install.sh`.
 
 ## Design notes
 

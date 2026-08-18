@@ -272,7 +272,7 @@ one-shot 没有 `outputSchema` 概念，bridge 任务上不要声明结构化 `o
 
 经 npx 安装的 dsh 住在 npx 缓存根（`~/.npm/_npx/<hash>/`）里。npx 重新解析依赖或缓存清理时，live 根会**静默切换** —— 旧根（连同打好的 cwd 补丁）被整体弃用且毫无报错，`dsh-tools` 符号链接则变成悬空。两个症状（DESIGN §6.4.5）：
 
-1. **逐次调用 `cwd` 静默失效** —— 子代理回退到父会话的 cwd（旧根里的补丁已死）。
+1. **逐次调用 `cwd` 大声拒绝（旧形态为静默失效）** —— 旧根（连同打好的 cwd 补丁）被整体弃用后，`patches/.applied` stamp 里记录的 `liveRoot` 不再匹配当前根，native 驱动的 stamp 门控会带双路径与修复指引地 throw（而不是让未打补丁的 harness 静默丢弃 `cwd` 字段、子代理回退父 cwd 还记成功）。
 2. **所有工具调用阵亡**，报
    `Cannot read properties of undefined (reading 'prepare')` —— 悬空的 `dsh-tools` 链接解析出第二个模块实例。
 
@@ -285,6 +285,8 @@ one-shot 没有 `outputSchema` 概念，bridge 任务上不要声明结构化 `o
 ```
 
 `~/.dsh` 下的 preset 副本不受换根影响。安装器动态解析 live 根（`which dsh` → realpath → 上溯到 `node_modules`；可用 `DSH_HARNESS_ROOT` 显式覆盖）—— 绝不硬编码缓存路径。
+
+stamp 门控自身也在做同样的动态校验：`patches/.applied` 只对它点名的那一个 live 根有证明力，所以 native 驱动每次放行 `cwd` 前都会把 stamp 里的 `liveRoot` 与「当前根」比对 —— 当前根在 JS 侧按 `resolve-root.sh` 同一套逻辑解析（从本插件实际链入的 `@deepseek-ai/dsh-tools` peer 的真实落点上溯到 `node_modules` 的父目录）。外来 stamp（历史上曾随 npm tarball 泄漏，现已从打包白名单排除）、npx 漂移后的旧 stamp、缺失 `liveRoot` 字段的残缺 stamp，一律 loud 失败并指引重跑 `install.sh`。
 
 ## 设计说明
 

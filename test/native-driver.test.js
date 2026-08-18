@@ -11,6 +11,9 @@
 //   - `provider/model` 组合 id 拆分（复合覆盖 provider、裸 id 不动、保留 maxTokens）；
 //   - cwd 补丁 stamp 门控（两枚 applied → 放行；一枚 native（非 verified）→ throw；
 //     stamp 缺失 / 非 JSON / 字段不全 → throw；native-verified 混合 applied → 放行）；
+//   - E-1/C-1 liveRoot 一致性：stamp.liveRoot 指向他根（外来 stamp / npx 漂移）→
+//     loud 失败（双路径入错误文案 + 指引）；stamp 无 liveRoot → throw；live root
+//     无法解析 → throw；真实根 + 本机已安装 stamp → 端到端放行；
 //   - cwd 值断言（相对路径 → assertCwd throw，CW 原文案）；
 //   - settleForegroundRun 语义（stopReason≠completed → throw 含 partial output；
 //     disposal 聚合错误；未知 stopReason）；
@@ -20,9 +23,12 @@
 //     providerWording/resolveDelegationRun/stopReasonError/withPartialText）。
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { existsSync } from 'node:fs'
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises'
+import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { createNativeDriver } from '../lib/drivers/native.js'
 import { NATIVE_CAPS } from '../lib/drivers/types.js'
 import {
@@ -422,7 +428,7 @@ test('bare model id stays bare (no provider override)', async () => {
   assert.deepEqual(calls.start[0].request.agentOptions, { model: 'glm-5.3', maxTokens: 1024 })
 })
 
-// ---- cwd：值断言 + 补丁 stamp 门控（勘误 2 语义） ----
+// ---- cwd：值断言 + 补丁 stamp 门控（勘误 2 语义 + E-1/C-1 liveRoot 一致性）----
 
 test('relative cwd throws CW assertCwd message regardless of stamp', async () => {
   const { ctx } = fakeCtx()
@@ -439,13 +445,14 @@ test('cwd with stamp both applied is forwarded (stamp injected to tmp)', async (
     await writeFile(stampPath, JSON.stringify(stampDoc({
       inProcessDriver: 'applied',
       subagentBundle: 'applied',
-    })), 'utf8')
+    }, { liveRoot: '/fake/live-root' })), 'utf8')
     const { ctx, calls } = fakeCtx()
     const driver = createNativeDriver({
       kind: 'spawn',
       ctx,
       config: { provider: 'spawn' },
       stampPath,
+      liveRootOverride: '/fake/live-root',
     })
     await driver.start(baseRequest({ native: { cwd: root } }))
     assert.equal(calls.start[0].request.cwd, root)
@@ -458,17 +465,136 @@ test('cwd passes when one patch is applied and the other native-verified', async
     await writeFile(stampPath, JSON.stringify(stampDoc({
       inProcessDriver: 'native-verified',
       subagentBundle: 'applied',
-    })), 'utf8')
+    }, { liveRoot: '/fake/live-root' })), 'utf8')
     const { ctx, calls } = fakeCtx()
     const driver = createNativeDriver({
       kind: 'spawn',
       ctx,
       config: { provider: 'spawn' },
       stampPath,
+      liveRootOverride: '/fake/live-root',
     })
     await driver.start(baseRequest({ native: { cwd: root } }))
     assert.equal(calls.start[0].request.cwd, root)
   })
+})
+
+// ---- E-1/C-1: stamp.liveRoot 一致性（驱动侧第二道闸）----
+
+test('E-1/C-1: cwd throws loudly when the stamp liveRoot names a DIFFERENT root (foreign stamp / npx drift)', async () => {
+  await withTmpDir(async (root) => {
+    const stampPath = join(root, '.applied')
+    // A perfectly "applied" stamp — but recorded against someone else's root:
+    // exactly what a leaked tarball stamp (or a pre-drift npx cache root) looks
+    // like. Both patch states being trusted must NOT unlock cwd here.
+    await writeFile(stampPath, JSON.stringify(stampDoc({
+      inProcessDriver: 'applied',
+      subagentBundle: 'applied',
+    }, { liveRoot: '/foreign/someone-elses-live-root' })), 'utf8')
+    const { ctx, calls } = fakeCtx()
+    const driver = createNativeDriver({
+      kind: 'spawn',
+      ctx,
+      config: { provider: 'spawn' },
+      stampPath,
+      liveRootOverride: '/this-machine/live-root',
+    })
+    await assert.rejects(
+      () => driver.start(baseRequest({ native: { cwd: root } })),
+      (err) => {
+        // loud, names BOTH roots, and carries the repair guidance
+        assert.match(err.message, /stamp liveRoot mismatch/)
+        assert.match(err.message, /\/foreign\/someone-elses-live-root/)
+        assert.match(err.message, /\/this-machine\/live-root/)
+        assert.match(err.message, /run patches\/install\.sh from the dsh-plugin-subagents package/)
+        return true
+      },
+    )
+    assert.equal(calls.start.length, 0, 'nothing reaches the harness start seam')
+  })
+})
+
+test('E-1/C-1: cwd throws loudly when the stamp carries no liveRoot record at all', async () => {
+  await withTmpDir(async (root) => {
+    const stampPath = join(root, '.applied')
+    const doc = stampDoc({ inProcessDriver: 'applied', subagentBundle: 'applied' })
+    delete doc.liveRoot
+    await writeFile(stampPath, JSON.stringify(doc), 'utf8')
+    const { ctx } = fakeCtx()
+    const driver = createNativeDriver({
+      kind: 'spawn',
+      ctx,
+      config: { provider: 'spawn' },
+      stampPath,
+      liveRootOverride: '/this-machine/live-root',
+    })
+    await assert.rejects(
+      () => driver.start(baseRequest({ native: { cwd: root } })),
+      (err) => {
+        assert.match(err.message, /stamp file has no liveRoot record/)
+        assert.match(err.message, /\/this-machine\/live-root/)
+        return true
+      },
+    )
+  })
+})
+
+test('E-1/C-1: cwd throws loudly when the live harness root cannot be resolved (peer missing)', async () => {
+  await withTmpDir(async (root) => {
+    const stampPath = join(root, '.applied')
+    await writeFile(stampPath, JSON.stringify(stampDoc({
+      inProcessDriver: 'applied',
+      subagentBundle: 'applied',
+    }, { liveRoot: '/fake/live-root' })), 'utf8')
+    const { ctx } = fakeCtx()
+    const driver = createNativeDriver({
+      kind: 'spawn',
+      ctx,
+      config: { provider: 'spawn' },
+      stampPath,
+      liveRootUnresolvable: true,
+    })
+    await assert.rejects(
+      () => driver.start(baseRequest({ native: { cwd: root } })),
+      (err) => {
+        assert.match(err.message, /cannot resolve the current live harness root/)
+        assert.match(err.message, /run patches\/install\.sh from the dsh-plugin-subagents package/)
+        return true
+      },
+    )
+  })
+})
+
+test('E-1/C-1: the production path trusts the stamp against the REAL harness root (no override injection)', async (t) => {
+  // Local-machine probe: this test asserts against the RUNNING harness — it
+  // needs the repo's own patches/.applied stamp (gitignored, written by
+  // patches/install.sh) AND a live dsh-tools peer (symlinked to the installed
+  // harness by setup:peer / install.sh Stage A). Neither exists on a clean
+  // checkout or in bare CI, so skip there instead of hard-red.
+  const stampPath = fileURLToPath(new URL('../patches/.applied', import.meta.url))
+  let peerLink
+  try {
+    peerLink = dirname(createRequire(import.meta.url).resolve('@deepseek-ai/dsh-tools/package.json'))
+  } catch {
+    peerLink = undefined
+  }
+  if (!existsSync(stampPath) || peerLink === undefined) {
+    t.skip('local-machine production-path probe: patches/.applied or live harness link absent')
+    return
+  }
+  // On this machine the plugin's dsh-tools peer symlink points at the running
+  // harness root (Stage A / setup:peer), so the dynamic resolution must land
+  // on that root and the repo's own patches/.applied (installed by
+  // patches/install.sh against that same root) must PASS the gate end to end.
+  const { ctx, calls } = fakeCtx()
+  const driver = createNativeDriver({ kind: 'spawn', ctx, config: { provider: 'spawn' } })
+  const cwd = await mkdtemp(join(tmpdir(), 'dsh-plugin-subagents-liveroot-'))
+  try {
+    await driver.start(baseRequest({ native: { cwd } }))
+    assert.equal(calls.start[0].request.cwd, cwd, 'cwd forwarded through the real stamp gate')
+  } finally {
+    await rm(cwd, { recursive: true, force: true })
+  }
 })
 
 test('cwd throws with install guidance when one patch state is bare "native"', async () => {

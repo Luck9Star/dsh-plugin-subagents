@@ -3,9 +3,12 @@
 // 覆盖：
 //   - package.json 的 files 白名单包含全部必要路径（lib/ roles/ patches/
 //     scripts/ cordis.patch.yml + 各文档）且不含 docs/ 或 test/。
+//   - files 白名单显式排除 `patches/.applied`（E-1/C-1 打包侧）——stamp 携带
+//     安装机的 liveRoot 与补丁状态，随 tarball 分发等于外发一个可被他人
+//     stamp 覆盖的 cwd 门控令牌（驱动侧的 liveRoot 一致性校验是第二道闸）。
 //   - 实际执行 `npm pack --dry-run --json`（子进程），断言产物文件清单里
-//     没有 docs/ 或 test/ 前缀的条目 —— npm 不可用（CI 无 npm / 无网络）则
-//     console.warn 并 t.skip，测试仍绿。
+//     没有 docs/ 或 test/ 前缀的条目、也没有 patches/.applied —— npm 不可用
+//     （CI 无 npm / 无网络）则 console.warn 并 t.skip，测试仍绿。
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
@@ -95,6 +98,24 @@ test('package.json files whitelist excludes docs/ and test/', () => {
   )
 })
 
+test('package.json files statically pins the patches/ include and the !patches/.applied negation', () => {
+  // CI-safe static pin: the dynamic npm pack check below skips whenever npm is
+  // unavailable, so this pure assertion hard-guarantees the tarball always
+  // ships the installer (patches/) but never the installer's gitignored stamp
+  // (patches/.applied carries the liveRoot + applied states of the machine
+  // that ran it — leaking it would hand out a foreign cwd-gate token). Zero
+  // external deps, runs on every bare runner.
+  const pkg = readPackageJson()
+  assert.ok(
+    Array.isArray(pkg.files) && pkg.files.includes('patches/'),
+    'files must include the patches/ directory (the installer runs from it)',
+  )
+  assert.ok(
+    Array.isArray(pkg.files) && pkg.files.includes('!patches/.applied'),
+    'files must negate patches/.applied (stamp must never ship in the tarball)',
+  )
+})
+
 test('npm pack --dry-run contains no docs/ or test/ prefixed entries', async (t) => {
   let packed
   try {
@@ -124,6 +145,43 @@ test('npm pack --dry-run contains no docs/ or test/ prefixed entries', async (t)
     [],
     `packed file list must not contain docs/ or test/ entries, got: ${bad.join(', ')}`,
   )
+})
+
+test('npm pack --dry-run never ships patches/.applied (E-1/C-1: stamp carries the installer machine state)', async (t) => {
+  // A shipped stamp would carry SOMEONE ELSE'S liveRoot and applied states into
+  // every npm install; the driver's liveRoot-consistency check (native.js)
+  // would then loudly reject it, but the tarball must not carry it in the
+  // first place. The `!patches/.applied` negation in files is the gate —
+  // verified experimentally: npm's files-negation DOES apply to subpaths.
+  let packed
+  try {
+    packed = await npmPackFileList()
+  } catch (err) {
+    if (err.code === 'DSH_NO_NPM') {
+      console.warn('[publish-pack] npm not available; skipping pack dry-run check')
+      t.skip('npm unavailable — .applied pack check skipped')
+      return
+    }
+    if (err.code === 'DSH_PACK_PARSE') {
+      console.warn('[publish-pack] npm pack --dry-run --json output unparseable; skipping', err.message)
+      t.skip('npm pack --dry-run --json parse failure — .applied pack check skipped')
+      return
+    }
+    throw err
+  }
+
+  assert.ok(
+    !packed.fileList.includes('patches/.applied'),
+    'patches/.applied must never ship in the tarball (files negation "!patches/.applied"); '
+    + `got: ${packed.fileList.filter((p) => p.startsWith('patches/')).join(', ')}`,
+  )
+  // The rest of patches/ must still ship (install.sh etc. run FROM the install).
+  for (const needed of ['patches/install.sh', 'patches/verify.sh']) {
+    assert.ok(
+      packed.fileList.includes(needed),
+      `${needed} must still ship (the installer/doctor run from the installed package)`,
+    )
+  }
 })
 
 test('publish.yml guards against the placeholder repository URL before publishing', () => {

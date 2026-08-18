@@ -12,6 +12,83 @@ First release. `dsh-plugin-subagents` unifies and fully replaces
 `legacy-bridges-plugin` (external agent bridges) in one plugin that
 takes over the official `subagent` / `subagent_fork` tool names.
 
+### Fixed (2026-08-18 audit round)
+
+- **E-1/C-1 (P1): the cwd gate could be satisfied by a foreign `.applied`
+  stamp.** Two stacked defects: (a) `patches/.applied` — the install-time
+  record naming THIS machine's live harness root and patch states — shipped
+  inside the npm tarball (`files` included `patches/` wholesale), so every
+  `npm install` carried someone else's `liveRoot` + `applied` marker; (b)
+  `lib/drivers/native.js`'s `assertCwdPatchesTrusted` verified only the two
+  patch states, never that the stamp's `liveRoot` equals the CURRENT harness
+  root — an npm user who skipped `install.sh` got cwd silently unlocked
+  against an unpatched harness (which then drops the `cwd` field with no
+  error: children run in the parent's cwd, the task "succeeds"). Fixes:
+  the `files` whitelist now negates `!patches/.applied` (verified:
+  npm's files-negation applies to subpaths; `npm pack --dry-run` no longer
+  lists the stamp, and `test/publish-pack.test.js` pins it), and the stamp
+  gate additionally requires `stamp.liveRoot === <current root>`, where the
+  current root is resolved JS-side by walking up from the realpath of the
+  plugin's `@deepseek-ai/dsh-tools` peer (the mirror of
+  `patches/resolve-root.sh`'s logic — the peer symlink repaired by Stage A /
+  `setup:peer` makes the shared package the strongest existing evidence of
+  "same root as the harness"). Mismatch, a missing `liveRoot` record, or an
+  unresolvable root all fail LOUD with both paths in the message and the
+  `install.sh` repair guidance; the stamp is still re-read on every cwd call
+  (running install still needs no restart). Tests: a foreign-root stamp and
+  an npx-drift stamp throw loudly; the production path passes end-to-end on
+  this machine against the real installed stamp.
+- **R-1 (P2): the ACP bridge's `textBuffer` grew without bound.** The ACP
+  transport speaks stdio directly (`spawnProduct`, not `runCommand`), so
+  `lib/run.js`'s 8MB tail cap never applied; a runaway agent could exhaust
+  memory in one turn. The buffer now uses the same `appendCapped` semantics
+  (last 8MB kept, head dropped), `drainText()` unchanged; the progress
+  `receivedChars` still counts the true stream size. Regression: a
+  real-SDK fake agent streams a 9MiB turn — the drained text is exactly
+  8MiB, exactly 1MiB falls off the head, and the boundary case
+  (1KiB over cap) drops exactly 1KiB.
+- **G-1 (P2): the claude and codex bridges had no process-level regression
+  tests** (only the grok bridge did). Both now have full fake-CLI suites in
+  the grok paradigm — node-script shims that record argv to a file and
+  replay fixture output, with argv asserted element-for-element, zero
+  network / zero real CLI:
+  `test/claude-bridge.test.js` (12 cases: last-line JSON parsing over
+  streaming multi-line output, `--session-id` preallocation, `--resume`
+  promotion after an interrupted first turn, `is_error`, unparseable
+  output, abort/timeout markers, permission-mode mapping, redaction,
+  flag-injection whitelist) and `test/codex-bridge.test.js` (17 cases:
+  `thread.started` incremental capture surviving an interrupted turn, the
+  `resume <thread_id>` subcommand shape, `item.completed` text
+  concatenation, `error`/`turn.failed` surfacing at exit 0, half-line JSON
+  tolerance (truncated lines dropped, never relayed), non-zero-exit
+  classification with and without text, plain-text fallback, pre-0.147
+  underscore event shapes, abort/timeout, `-c key=value` and sandbox flag
+  mapping, config-injection whitelist). The ACP bridge additionally gained
+  a real-SDK agent-process test file (`test/acp-bridge.test.js`, 6 cases:
+  normal turn, both textBuffer cap boundaries, abort, mute-server and
+  instant-death handshake regressions).
+- **CI-safe tests + memo fix + static pins (cross-review round).** (a) The
+  production-path end-to-end test in `test/native-driver.test.js` depended on
+  the machine-local gitignored `patches/.applied` stamp and the live
+  dsh-tools peer symlink — a clean checkout / bare CI hard-red. It now probes
+  both up front and `t.skip`s ("local-machine production-path probe…") when
+  either is absent, while still running for real on this machine. (b)
+  `lib/drivers/native.js`'s `resolveLiveHarnessRoot` failure result was
+  memoized per driver instance, so a resolution that failed BEFORE
+  `install.sh` stayed failed after it until restart — contradicting the
+  README's "no restart needed after running install.sh"; only a successful
+  resolution is now memoized, failures retry on the next cwd call (loud
+  failure behavior unchanged). (c) `test/publish-pack.test.js` gains a
+  pure-static, zero-dependency assertion that `files` pins both `patches/`
+  and the `!patches/.applied` negation — the dynamic `npm pack` check is
+  skipped when npm is unavailable, so this hard-guards the tarball gate on
+  every bare runner.
+- **P3 cleanups:** `test/smoke.test.js`'s scaffold placeholder
+  (`assert.ok(true)`) replaced with a real minimal smoke (package manifest
+  wiring + `lib/index.js` entry exports + all four bridge factories
+  building the contract); the stale "316 node:test cases" count in this
+  CHANGELOG corrected to the current number (480).
+
 ### Added
 
 **Engine-level dispatch seam (bridge programmatic dispatch)**
@@ -282,9 +359,12 @@ takes over the official `subagent` / `subagent_fork` tool names.
 - Bilingual README (effect matrix, mutual-exclusion table, six-step install,
   npx-cache drift playbook), CHANGELOG, AGENTS.md (design red lines),
   SECURITY.md, and an acceptance record in `docs/VERIFY.md`.
-- 316 `node:test` cases — pure logic plus fake bridge / driver / ctx; the
+- 479 `node:test` cases — pure logic plus fake bridge / driver / ctx; the
   suite never requires a real CLI, a key, or a network (lint whitelist and
-  npm-pack content checks included).
+  npm-pack content checks included). The claude/codex/grok bridges carry
+  process-level fake-CLI regressions (node-script shims record argv and
+  replay fixtures — argv asserted byte-for-byte), and the ACP bridge runs a
+  real-SDK `AgentSideConnection` child process (devDependency, no network).
 - `npm run lint`: `node --check` every module plus the
   `@deepseek-ai/dsh-subagent` pure-function import whitelist
   (`assertSubagentMaxDepth`, `settleRun`).
