@@ -1,6 +1,6 @@
 // dsh-plugin-subagents — `subagent_submit` 工具测试（T12）。
 //
-// 自前身 legacy-bridges-plugin `test/tools.test.js` 的 product_submit 用例迁移
+// 自旧版桥接插件 `test/tools.test.js` 的 product_submit 用例迁移
 // （断言不削弱），工具名断言改 subagent_submit，并按 T12 验收补全：
 //   - 恢复矩阵四态：
 //     ① live binding → 直接用（无 reconnect/create，settings 驱动远端权限）；

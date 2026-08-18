@@ -14,7 +14,7 @@
 //          `name` is '@deepseek-ai/dsh-tool-subagent' AND whose
 //          `config.toolName` is `subagent` / `subagent_fork`. With the
 //          shadowing rows gone, the host-plane plugin tools become directly
-//          visible. Unlike the legacy-cwd-plugin "rewrite the row" approach
+//          visible. Unlike the earlier cwd plugin’s "rewrite the row" approach
 //          this keeps ONE plugin instance — no split state, no duplicate
 //          registrations. A preset without generic rows (e.g. `orchestrator`)
 //          is a no-op success: there is nothing to un-shadow, and the copy

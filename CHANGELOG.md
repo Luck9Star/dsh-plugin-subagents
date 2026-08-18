@@ -7,10 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.1.0] - Unreleased
 
-First release. `dsh-plugin-subagents` unifies and fully replaces
-`legacy-cwd-plugin` (configurable native subagents) and
-`legacy-bridges-plugin` (external agent bridges) in one plugin that
-takes over the official `subagent` / `subagent_fork` tool names.
+First release. `dsh-plugin-subagents` unifies two earlier internal
+plugins — configurable native subagents (per-call overrides including
+`cwd`) and external agent bridges — in one plugin that takes over the
+official `subagent` / `subagent_fork` tool names.
+
+### Documentation (2026-08-18) — README rewrite
+
+- Both READMEs (`README.md` / `README.zh.md`) rewritten in plain language,
+  still section-for-section aligned. New shape: what the plugin gives you →
+  when to reach for it → install with per-step explanations and an expected
+  result → quick start with real tool calls → built-in roles / tools tables
+  → safety features in user terms → trimmed configuration table →
+  troubleshooting table → references & credits. Per maintainer request, the
+  READMEs no longer name the predecessor package; provenance is presented
+  as a "References & credits" list (Claude Code agent files, Codex /
+  Claude Code / Grok CLIs, ACP SDK, task-weaver) instead. The
+  mutual-exclusion instructions were generalized to "remove the other
+  plugin taking over `subagent` or registering the same bridge backends".
+- Earlier-plugin references scrubbed repo-wide: CHANGELOG historical
+  entries, AGENTS.md, cordis.patch.yml comments, docs/ and code comments
+  now use generic wording ("an earlier internal bridges plugin" / "an
+  earlier internal cwd plugin"); runtime log and error prefixes from the earlier plugin renamed to
+  `subagents:`. Only functional references remain —
+  the one-time migration source path `~/.dsh/product-subagents-registry.json`
+  and its tests. Git history was rewritten to remove the earlier package
+  names from all past commits and commit messages (pre-rewrite mirror
+  backup kept locally).
 
 ### Documentation (2026-08-18)
 
@@ -299,8 +322,8 @@ takes over the official `subagent` / `subagent_fork` tool names.
 
 **Bridge backends**
 
-- Claude Code, Codex, and generic ACP bridges migrated from
-  `legacy-bridges-plugin` (bridge contract unchanged:
+- Claude Code, Codex, and generic ACP bridges carried over from an
+  earlier internal bridges plugin (bridge contract unchanged:
   `create` / `submit` / `reconnect` / `dispose`).
 - Any ACP CLI joins through `config.providers` with zero code (e.g. grok).
 - Providers register only when their CLI is detected on `PATH` (parallel
@@ -361,9 +384,10 @@ takes over the official `subagent` / `subagent_fork` tool names.
   tools show through; L2 (`--enhance-rows`) rewrites official subagent rows to
   this plugin with `presetRow: true`. Idempotent; the source preset is never
   modified; POSIX sh + PowerShell.
-- Enforced mutual exclusion with `legacy-cwd-plugin` / `dsh-subagent-tools`
-  (duplicate tool registration) and `legacy-bridges-plugin` (duplicate
-  bridge provider registration) — both fail loudly at startup by design.
+- Enforced mutual exclusion with same-surface plugins such as
+  `dsh-subagent-tools` (duplicate tool registration) and the earlier
+  internal bridges plugin (duplicate bridge provider registration) —
+  both fail loudly at startup by design.
 - Strict zod config with two branches: the full plugin schema and the
   official preset-row shape; unknown keys fail loudly at apply time.
 - dsh-tools double-instance self-check at apply time: detects the second
@@ -499,7 +523,7 @@ takes over the official `subagent` / `subagent_fork` tool names.
   lazy `ctx.get('sessions')` accessor and `systemPrompt` was missing), which
   made Cordis throw `cannot get property "systemPrompt" without inject` at
   startup. `inject` is now `['subagents','tools','systemPrompt']`,
-  matching `legacy-cwd-plugin`, with a strict-ctx regression test that
+  matching the earlier cwd plugin, with a strict-ctx regression test that
   emulates the Cordis inject mechanism across every `apply()` branch.
 - Fixed boot failure — `apply()` now resolves to `undefined`. The Cordis
   loader treats the plugin callback's return value as a disposable

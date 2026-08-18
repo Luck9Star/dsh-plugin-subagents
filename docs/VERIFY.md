@@ -12,7 +12,7 @@
 | A3 | B 段两枚 cwd 补丁（四态状态机→applied） | ✅ | `inProcessDriver=applied  subagentBundle=applied`，`.bak_cwd` 备份 ×2，stamp 写入 `patches/.applied` |
 | A4 | 行为探针对真实 rc.6 根只读验证 | ✅ | T16 交付时执行：正确判定「未原生转发 per-call cwd」（补丁必要性实锤） |
 | A5 | doctor（verify.sh）全项 | ✅ | `(a) live root OK (b1/b2) applied (c) 两链接 OK (d) 版本一致`，`VERIFY_EXIT=0`；pnpm 变更后复跑仍 OK |
-| A6 | profile 接线：依赖换轨 + bundle 注册 | ✅ | package.json：移除 legacy-bridges-plugin 依赖、新增 dsh-plugin-subagents link、bundles 列表追加；pnpm install 成功；旧符号链接清除 |
+| A6 | profile 接线：依赖换轨 + bundle 注册 | ✅ | package.json：移除旧插件依赖、新增 dsh-plugin-subagents link、bundles 列表追加；pnpm install 成功；旧符号链接清除 |
 | A7 | grok ACP 配置迁移 | ✅ | profile cordis.patch.yml：旧行删除，新 `- id: subagents` 定向覆盖行携带 `providers.grok`（grok agent --always-approve stdio） |
 | A8 | 模块加载冒烟（profile 上下文） | ✅ | `import('dsh-plugin-subagents')` → `MODULE_LOADED: dsh-plugin-subagents`（peer 解析含 dsh-tools 符号链接全部成功） |
 | A9 | 两份 patch YAML 语法预检 | ✅ | profile 层 3 行、插件 bundle 层 3 行均可解析（防重启时 loader 报错） |

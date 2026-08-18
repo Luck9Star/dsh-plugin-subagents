@@ -3,7 +3,7 @@
 > 配套 `docs/DESIGN.md` 阅读。任务可独立派发给实现代理；每个任务自包含：目标 / 范围与涉及文件 / 验收标准 / 依赖。
 > 通用约束（每个任务默认遵守）：
 > - 设计红线见 DESIGN §9（relay 只读、天花板 fail closed、`--` 之后传任务文本、flag 值白名单、能力不匹配 loud error…）。
-> - 测试一律 `node:test` + fake（bridge/driver/ctx），**不依赖真实 CLI 与密钥**。前身 legacy-bridges-plugin 测试套件（60 例全绿）为**继承基线**：随迁用例不得削弱断言，新用例只增不改语义。
+> - 测试一律 `node:test` + fake（bridge/driver/ctx），**不依赖真实 CLI 与密钥**。旧版桥接插件 测试套件（60 例全绿）为**继承基线**：随迁用例不得削弱断言，新用例只增不改语义。
 > - 不修改两个前身仓库；迁移代码时保留原注释语义，只做设计文档要求的改名与扩展。
 > - 行为约定引用：`D` 表示 DESIGN.md 章节，`R` 表示风险项。
 
@@ -24,13 +24,13 @@ P5 质量与发布    T19 T20 T21                  （依赖全部）
 
 ### T01 仓库脚手架与包清单
 - **目标**：新仓库可 `npm install && npm test`（空测试）通过，包身份与依赖契约定稿。
-- **范围/文件**：`package.json`（name `dsh-plugin-subagents`；`dsh.bundle.patch: ./cordis.patch.yml`；deps `@agentclientprotocol/sdk@^0.25.0`、`zod@^3.23.0`、`yaml`；peerDependencies `@deepseek-ai/{cordis@^4.0.1,dsh-tools@^0.1.0-rc.6,dsh-subagent@^0.1.0-rc.6,dsh-agent@^0.1.0-rc.6,dsh-llm@^0.1.0-rc.6,dsh-session@^0.1.0-rc.6,dsh-jobs@^0.1.0-rc.6,dsh-home-paths}`；scripts test/lint/setup:peer 沿 legacy-bridges-plugin）、`.gitignore`、`LICENSE`（MIT）、`test/.smoke.test.js`、`scripts/link-harness-dsh-tools.sh`（照搬 legacy-bridges-plugin 版）。
+- **范围/文件**：`package.json`（name `dsh-plugin-subagents`；`dsh.bundle.patch: ./cordis.patch.yml`；deps `@agentclientprotocol/sdk@^0.25.0`、`zod@^3.23.0`、`yaml`；peerDependencies `@deepseek-ai/{cordis@^4.0.1,dsh-tools@^0.1.0-rc.6,dsh-subagent@^0.1.0-rc.6,dsh-agent@^0.1.0-rc.6,dsh-llm@^0.1.0-rc.6,dsh-session@^0.1.0-rc.6,dsh-jobs@^0.1.0-rc.6,dsh-home-paths}`；scripts test/lint/setup:peer 沿 旧版桥接插件）、`.gitignore`、`LICENSE`（MIT）、`test/.smoke.test.js`、`scripts/link-harness-dsh-tools.sh`（照搬 旧版桥接插件 版）。
 - **验收**：`npm test` 绿；`node scripts/lint.js` 存根可跑；`dsh.bundle.patch` 字段存在（`exportsPatch()` 能识别，见 DESIGN §2.3-A）。
 - **依赖**：无。
 
 ---
 
-## P1 纯逻辑迁移（自 legacy-bridges-plugin 原样搬运 + 指定扩展）
+## P1 纯逻辑迁移（自 旧版桥接插件 原样搬运 + 指定扩展）
 
 ### T02 bridges 三件套迁移
 - **目标**：claude / codex / acp bridges 原样可用。
@@ -79,7 +79,7 @@ P5 质量与发布    T19 T20 T21                  （依赖全部）
 ### T08 NativeDriver
 - **目标**：spawn/fork 两实例的 native 驱动（DESIGN §3.4）。
 - **范围/文件**：
-  - `lib/native-delegate.js` ← 自 `legacy-cwd-plugin/lib/index.js` 抽出纯函数：`resolvePersona`/`resolvePresetByDisplayName`/`resolveModelRoute`/`assertCwd`/`settleStart`/`settleForegroundRun`/`stopReasonError`/`withPartialText`/`outputValueText`/`providerWording`/`resolveDelegationRun`。
+  - `lib/native-delegate.js` ← 自 `旧版 cwd 插件/lib/index.js` 抽出纯函数：`resolvePersona`/`resolvePresetByDisplayName`/`resolveModelRoute`/`assertCwd`/`settleStart`/`settleForegroundRun`/`stopReasonError`/`withPartialText`/`outputValueText`/`providerWording`/`resolveDelegationRun`。
   - `lib/drivers/native.js`：`start`（三路由：sync=`ctx.subagents.start`+settle；job=`ctx.get('jobs')` 包裹；continuable=`startContinuable`）、`progress`（session 折叠 + listChildren）、`dispose`；cwd 补丁 stamp 检测（`patches/.applied` 缺失且请求带 cwd → Error 指引 `patches/install`）。
   - `test/native-driver.test.js`：fakeCtx 的 `subagents.start/startContinuable/listChildren`、fake jobs；验证三路由输出 kind、per-call 覆盖合并次序（args > role.overrides > config）、`@preset:` 解析（tmp 目录造 preset）、provider-added 惰性挂载不在此层（工具层职责）。
 - **验收**：上述用例全绿；`settleForegroundRun` 的 disposal 聚合错误语义保持（原实现照搬）。
@@ -87,7 +87,7 @@ P5 质量与发布    T19 T20 T21                  （依赖全部）
 
 ### T09 BridgeDriver
 - **目标**：bridge 驱动三路由（sync 直连 / continuable relay / job 拒绝并折叠为 continuable）。
-- **范围/文件**：`lib/drivers/bridge.js`：持有 bridges+bindings+registry+liveChildren+idle 调度（自 legacy-bridges-plugin `lib/index.js` L95–L233 迁移：idleTimeout/并发槽/pending-start guard/endedAt/persistRemote/teardown）；`start` 组装 relay（persona=providerPersona+委派句、toolFilter=§5.4 白名单）；`followup` 校验 binding；`progress`（binding+fold）；`dispose`。provider 注册（`registerProvider` 包装 `start/prepareContinuable`，自 `lib/index.js` L169–L213 迁移）也在此文件导出 `createBridgeProviders()`。
+- **范围/文件**：`lib/drivers/bridge.js`：持有 bridges+bindings+registry+liveChildren+idle 调度（自 旧版桥接插件 `lib/index.js` L95–L233 迁移：idleTimeout/并发槽/pending-start guard/endedAt/persistRemote/teardown）；`start` 组装 relay（persona=providerPersona+委派句、toolFilter=§5.4 白名单）；`followup` 校验 binding；`progress`（binding+fold）；`dispose`。provider 注册（`registerProvider` 包装 `start/prepareContinuable`，自 `lib/index.js` L169–L213 迁移）也在此文件导出 `createBridgeProviders()`。
 - **验收**：`test/bridge-driver.test.js`（fake bridge + fakeCtx）：sync 路径 create→submit→dispose 顺序断言；continuable 路径 startContinuable 收到 persona/toolFilter；job 路由报能力错误；idle 释放与 cancelDispose；并发槽拒绝。
 - **依赖**：T07、T06。
 
@@ -103,7 +103,7 @@ P5 质量与发布    T19 T20 T21                  （依赖全部）
 
 ### T11 `subagent` 统一委派工具
 - **目标**：接管官方名的统一入口（DESIGN §5.3 全 schema 与校验次序）。
-- **范围/文件**：`lib/tools/subagent.js`；校验链：role 解析（未知 role 报列表）→ backend 归并（显式 > role.backend > native；冲突 throw）→ `assertParamsSupported` → bridge 可用性 + `assertWithinCeiling` → native persona/model/cwd/maxDepth → driver.start；输出 oneOf schema + render；`presetHints` 展开进 persona description；continuable 时注册 systemPrompt 后台使用段（order 116.5，沿 legacy-cwd-plugin）。
+- **范围/文件**：`lib/tools/subagent.js`；校验链：role 解析（未知 role 报列表）→ backend 归并（显式 > role.backend > native；冲突 throw）→ `assertParamsSupported` → bridge 可用性 + `assertWithinCeiling` → native persona/model/cwd/maxDepth → driver.start；输出 oneOf schema + render；`presetHints` 展开进 persona description；continuable 时注册 systemPrompt 后台使用段（order 116.5，沿 旧版 cwd 插件）。
 - **验收**：`test/subagent-tool.test.js`：① 默认走 native（无 backend/role）；② backend=codex 走 bridge sync/continuable；③ role.backend 被显式 backend 覆盖与冲突报错；④ 未知 role loud；⑤ bridge 子代理调用者触发天花板拦截；⑥ native+permission_mode / bridge+cwd 等 loud；⑦ role.instructions 前缀拼接；⑧ role.overrides 与 per-call 覆盖次序。
 - **依赖**：T10。
 
@@ -141,7 +141,7 @@ P5 质量与发布    T19 T20 T21                  （依赖全部）
 ### T16 cwd 补丁、live 根管理与 install/verify 脚本
 - **目标**：cwd 能力可分发、可重放，npx 缓存漂移可检测可修复（DESIGN §6.4 全部硬性要求；R1/R2）。
 - **范围/文件**：
-  - `patches/01-in-process-driver.patch`、`patches/02-subagent-bundle.patch`：锚点与 rc.6 一致（自 legacy-cwd-plugin 照搬）。
+  - `patches/01-in-process-driver.patch`、`patches/02-subagent-bundle.patch`：锚点与 rc.6 一致（自 旧版 cwd 插件 照搬）。
   - `patches/install.sh|ps1`（重写，不照搬前身根发现逻辑；**两段式、成败解耦**，DESIGN §6.4.2）：0. `resolve_live_root()`（POSIX：`which dsh` → realpath → 上溯至 `node_modules` 父目录 + 自证 `@deepseek-ai/dsh-subagent` 存在；Windows：`where dsh` shim 文本提取目标后同法；`DSH_HARNESS_ROOT` 显式覆盖）——**禁止硬编码路径、禁止 `ls | tail -1` 启发式**；A 段【强制先行】修复**两处** dsh-tools 符号链接（profile 与插件仓库 node_modules，均指向 live 根，吸收 fix-dsh-tools-dedupe.sh / link-harness-dsh-tools.sh 职责；`--links-only` 止于此）；B 段 cwd 补丁**四态状态机**逐枚判定（a 未打→应用；b 已打→幂等跳过；c **硬门控原生判定（双必要条件）**：锚不在时禁止全文 grep `request.cwd` 判据；条件 1 = `NATIVE_CWD_VERSIONS` 版本白名单（人工核实、初始为空），条件 2 = **install 路径强制行为探针**成功（经 `ctx.subagents.start` 起带 request.cwd 的最小子会话、允许即刻中断/处置、容忍无模型回复，断言 `header.cwd`；失败/不可执行 → 不记 native）；两门皆过才 no-op + stamp 记 **`native-verified`**（native driver 只认此态；`verify --probe` 为独立复检）；d 分两型 loud 失败且 remediation 分开：**d1 锚失配漂移**（→ 新版本插件重导补丁）/ **d2 白名单命中但探针未过**（→ 疑似误录，`verify --probe` 核实/更新清单）；**不阻塞/不影响 A 段结果**）；C 写 stamp `patches/.applied`（dsh 版本、live 根、A/B 各自结果、目标 mtime）。退出码：A 失败立即非零；B 状态 d 非零但输出说明链接已修复。
   - `patches/verify.sh|ps1`（doctor，只读）：报告 (a) live 根、(b) 两枚补丁标记串就位 —— **两个不同文件两个不同合并点分别检查**：(b1) driver 独立包 `agents.create({meta})` 合并处、(b2) dsh-subagent bundle 内联 continuable 管理器 `create.meta` 合并处（内联边界见 DESIGN §2.1：continuable 管理器在 bundle、one-shot 驱动在独立包）、(c) 两处符号链接指向 live 根（readlink/realpath 比对）、(d) 仓库 `@deepseek-ai/dsh-subagent` 副本版本 vs live 根（仅 warning，§6.4.4）；任一漂移非零退出 + 一行修复提示。
   - `patches/uninstall.sh|ps1`：只还原补丁备份；**不回滚 A 段链接**（部署健康项，非插件私有状态，DESIGN §6.4.2 卸载注意）。
@@ -150,7 +150,7 @@ P5 质量与发布    T19 T20 T21                  （依赖全部）
 
 ### T17 preset 适配脚本（L1/L2）
 - **目标**：web 形态 preset 遮蔽问题可脚本化解决（DESIGN §6.3，R5）。
-- **范围/文件**：`scripts/install-preset.sh|ps1`（双平台，补齐 legacy-cwd-plugin 缺失的 POSIX 版）：L1 默认复制源 preset → 删通用委派行（锚定 `name: '@deepseek-ai/dsh-tool-subagent'` + `toolName in {subagent, subagent_fork}`）→ 写副本标记；`--enhance-rows` L2：全部该 name 行改写 `name: 'dsh-plugin-subagents'` + `presetRow: true`；幂等（检测标记跳过）；锚失配 loud。
+- **范围/文件**：`scripts/install-preset.sh|ps1`（双平台，补齐 旧版 cwd 插件 缺失的 POSIX 版）：L1 默认复制源 preset → 删通用委派行（锚定 `name: '@deepseek-ai/dsh-tool-subagent'` + `toolName in {subagent, subagent_fork}`）→ 写副本标记；`--enhance-rows` L2：全部该 name 行改写 `name: 'dsh-plugin-subagents'` + `presetRow: true`；幂等（检测标记跳过）；锚失配 loud。
   > **2026-08-15 修正**（真机冒烟事故后，详见 DESIGN §6.3-L2 与 VERIFY.md）：L2 改为**只改写 `provider: spawn` 且 `toolName` 独立命名的行**，通用行 / `provider: fork` 行 / bridge 模板行一律**删除** —— 「全部改写」会产出过不了本插件 config 校验的行（fork 行撞全局 `subagent_fork` 名），一行非法即整个 preset 挂载失败；回归硬闸门（SAMPLE_D fixture + validateConfig 闸门）断言 L1/L2 产物每行过 validateConfig。
 - **验收**：`test/preset-adapter.test.js`：对内嵌样例（standard 形态、orchestrator 形态）执行 L1/L2，断言产物 YAML 结构与幂等；不触碰源 preset（只读断言）。
 - **依赖**：T15。
@@ -158,7 +158,7 @@ P5 质量与发布    T19 T20 T21                  （依赖全部）
 ### T18 README 安装/互斥/矩阵文档
 - **目标**：README.md + README.zh.md 覆盖 DESIGN §4.2 矩阵、§4.3 互斥、§6.5 流程。
 - **范围/文件**：`README.md`、`README.zh.md`（同步）、`CHANGELOG.md`（0.1.0 条目）、`AGENTS.md`（红线继承 DESIGN §9）、`SECURITY.md`。
-- **验收**：含"二选一"表（对 legacy-cwd-plugin / dsh-subagent-tools / 旧 legacy-bridges-plugin）；升级/漂移重放清单（重跑 patches/install → verify → 重启）；**npx 缓存漂移失效模式专节**（DESIGN §6.4.5：换根后 cwd 静默失效 / 工具调用全挂 reading 'prepare'，任一症状重跑 install 或先 verify）+ dsh-subagent 导入白名单决策说明（§6.4.4）；中英对照齐全。
+- **验收**：含"二选一"表（对 旧版 cwd 插件 / dsh-subagent-tools / 旧 旧版桥接插件）；升级/漂移重放清单（重跑 patches/install → verify → 重启）；**npx 缓存漂移失效模式专节**（DESIGN §6.4.5：换根后 cwd 静默失效 / 工具调用全挂 reading 'prepare'，任一症状重跑 install 或先 verify）+ dsh-subagent 导入白名单决策说明（§6.4.4）；中英对照齐全。
 - **依赖**：T15、T16、T17。
 
 ---
@@ -173,7 +173,7 @@ P5 质量与发布    T19 T20 T21                  （依赖全部）
 
 ### T20 CI 与 lint
 - **目标**：三平台 × Node 18/20/22 绿。
-- **范围/文件**：`.github/workflows/ci.yml`（沿 legacy-bridges-plugin：macOS/Ubuntu/Windows × 18/20/22，`npm ci && npm run lint && npm test`）、`publish.yml`、`scripts/lint.js`（node --check 全模块 + **`@deepseek-ai/dsh-subagent` 导入白名单检查** `{ assertSubagentMaxDepth, settleRun }`，DESIGN §6.4.4/红线 12）。
+- **范围/文件**：`.github/workflows/ci.yml`（沿 旧版桥接插件：macOS/Ubuntu/Windows × 18/20/22，`npm ci && npm run lint && npm test`）、`publish.yml`、`scripts/lint.js`（node --check 全模块 + **`@deepseek-ai/dsh-subagent` 导入白名单检查** `{ assertSubagentMaxDepth, settleRun }`，DESIGN §6.4.4/红线 12）。
 - **验收**：CI 首跑绿；无真实 CLI 依赖（runner 裸机可过）；lint 对越白名单导入的样例文件报错（测试内嵌正/反例）。
 - **依赖**：T14。
 

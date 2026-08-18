@@ -9,7 +9,7 @@
 #
 # Why it is needed: `SubagentStartRequest` has no cwd field and the in-process
 # drive layer never merges a per-call cwd into `agents.create({ meta })`.
-# Without this merge the `cwd` parameter of legacy-cwd-plugin is ignored
+# Without this merge the per-call `cwd` parameter is ignored
 # on the foreground path. (The continuable path needs patch 2 as well.)
 #
 # Apply:  run patches/install.ps1 (Windows) or patches/install.sh (POSIX),

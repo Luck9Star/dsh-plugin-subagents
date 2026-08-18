@@ -13,8 +13,8 @@ per-call overrides (including `cwd` via two distributed patches), and
 grok-native streaming-json bridge, any ACP agent) with a declarative role
 library, a delegation permission ceiling, and durable session recovery. The
 bare `grok` name belongs to the user's `config.providers` (see
-`lib/providers.js` NAMING OWNERSHIP). It fully replaces `legacy-cwd-plugin` and
-`legacy-bridges-plugin`; the design record is
+`lib/providers.js` NAMING OWNERSHIP). It fully replaces two earlier internal plugins (per-call native
+cwd overrides; external agent bridges); the design record is
 [docs/DESIGN.md](docs/DESIGN.md) and the task breakdown is
 [docs/TASKS.md](docs/TASKS.md).
 
@@ -40,7 +40,7 @@ lib/
   index.js            # apply(): config, self-checks, migration, drivers, tool registration
   config.js           # zod strict config (dual branch: full schema / preset-row shape)
   drivers/            # SubagentDriver contract + native/bridge drivers + assembly
-  native-delegate.js  # pure functions migrated from legacy-cwd-plugin
+  native-delegate.js  # pure functions migrated from the earlier cwd plugin
   tools/              # one module per model-facing tool (subagent*, legacy alias)
   bridges/            # one bridge per product protocol (claude / codex / grok / acp)
   providers.js        # config-driven provider registry (+ custom ACP agents)

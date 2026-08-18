@@ -1,7 +1,7 @@
 # dsh-plugin-subagents — 统一子代理插件 · 架构设计
 
 > 状态：设计定稿（已含用户拍板的 4 项决策；补丁锚点归属已用会话直接证据闭合 —— 见 §2.1「内联边界实证」）。实现前请配合 `docs/TASKS.md` 阅读。
-> 前身：`legacy-cwd-plugin`（可配置原生子代理）+ `legacy-bridges-plugin`（外部 agent 桥接）。
+> 前身：`旧版 cwd 插件`（可配置原生子代理）+ `旧版桥接插件`（外部 agent 桥接）。
 > 本文所有机制结论均来自对 rc.6 安装（`~/.npm/_npx/1e7f6d9597241db0/`）与两个前身仓库源码的实际阅读，关键依据随文标注。
 
 ---
@@ -12,7 +12,7 @@
 |---|---|---|
 | D1 | 插件名 | `dsh-plugin-subagents`（仓库 / npm 包 / 安装标识统一） |
 | D2 | 工具面策略 | **接管官方工具名**：通过自身 bundle patch（`cordis.patch.yml`）禁用官方 `tool-subagent` / `tool-subagent-fork` 行，注册扩展后的 `subagent` / `subagent_fork`（参数扩展 `backend` / `role` 等），模型习惯零迁移 |
-| D3 | 与 legacy-bridges-plugin 的关系 | **完全取代**：吸收其全部能力（bridges、角色库、permissionMode 天花板、durable registry、relay 模型、run.js、submit 管道）；README 明确安装时移除旧 host-plane 行 |
+| D3 | 与 旧版桥接插件 的关系 | **完全取代**：吸收其全部能力（bridges、角色库、permissionMode 天花板、durable registry、relay 模型、run.js、submit 管道）；README 明确安装时移除旧 host-plane 行 |
 | D4 | 默认后端 | **native**：`subagent` 不指定 `backend`/`role` 时走原生 in-process 子代理（行为对齐官方工具 + per-call 覆盖增强）；外部 agent 经 `backend` 参数或显式 role 选择 |
 
 本设计在此之上补充定案：**relay 管道工具统一命名为 `subagent_submit`**（理由见 §5.2）。
@@ -24,8 +24,8 @@
 ### 1.1 目标
 
 1. **统一抽象、分开实现**：一个 `SubagentDriver` 接口覆盖两类后端，工具面同构。
-2. **native 后端**：继承 `legacy-cwd-plugin` 全部能力 —— per-call `model`（含 `provider/model` 组合 id）/ `provider` / `persona`（含 `@preset:` 引用）/ `toolFilter` / `cwd` 覆盖。
-3. **bridge 后端**：继承 `legacy-bridges-plugin` 全部能力 —— claude / codex / 通用 ACP bridges、角色库、permissionMode 映射与委派天花板、durable registry、relay 只读管道、跨平台 `run.js`、`config.providers` 零代码接入任意 ACP agent（如 grok）。
+2. **native 后端**：继承 `旧版 cwd 插件` 全部能力 —— per-call `model`（含 `provider/model` 组合 id）/ `provider` / `persona`（含 `@preset:` 引用）/ `toolFilter` / `cwd` 覆盖。
+3. **bridge 后端**：继承 `旧版桥接插件` 全部能力 —— claude / codex / 通用 ACP bridges、角色库、permissionMode 映射与委派天花板、durable registry、relay 只读管道、跨平台 `run.js`、`config.providers` 零代码接入任意 ACP agent（如 grok）。
 4. **单一工具面**：一套 `subagent*` 家族工具同时服务两类后端。
 5. **可安装性**：一条安装路径覆盖 headless 与 web 两种形态（含 preset 适配与 cwd 补丁分发），升级 dsh 后可重放。
 
@@ -35,15 +35,15 @@
 - **不做官方包补丁之外的黑魔法**：cwd 转发仅限 `patches/` 中两个锚定补丁（见 §6.4），不改 dsh 源码树其它内容，不 hook 官方包内部函数。
 - **不实现 out-of-process / 远程子代理传输**（harness 已列为 deferred work，见 `@deepseek-ai/dsh-subagent` README "Known Limitations"）。
 - **不接管 `send_message` / `list_agents` / `interrupt_agent` / `report`**：官方 `tool-subagent-control` / `tool-subagent-report` 行继续提供，native 与 relay 子代理都依赖它们。
-- **不给 ACP 强加 permissionMode**：ACP 无可移植权限标志，维持 legacy-bridges-plugin 的立场（provider `args` 自配 + `requestPermission` 一律拒绝，见其 `lib/bridges/acp.js` 头注）。
+- **不给 ACP 强加 permissionMode**：ACP 无可移植权限标志，维持 旧版桥接插件 的立场（provider `args` 自配 + `requestPermission` 一律拒绝，见其 `lib/bridges/acp.js` 头注）。
 - **不迁移旧插件的 durable relay 子会话的对话内容**：仅做 registry 记录迁移与兼容别名（§6.6），不重写历史会话。
-- **不内置任何真实 CLI 依赖到测试**：测试套件必须无 CLI、无密钥可跑绿（继承 legacy-bridges-plugin AGENTS.md 红线）。
+- **不内置任何真实 CLI 依赖到测试**：测试套件必须无 CLI、无密钥可跑绿（继承 旧版桥接插件 AGENTS.md 红线）。
 
 ---
 
 ## 2. 现状分析（两个前身 + harness 机制）
 
-### 2.1 legacy-cwd-plugin（bundle 型，483 行核心）
+### 2.1 旧版 cwd 插件（bundle 型，483 行核心）
 
 - **机制**：`package.json` 声明 `dsh.bundle.patch → ./cordis.patch.yml`。该 patch 层：
   1. `- id: tool-subagent / tool-subagent-fork` `disabled: true`（禁用官方行，headless 必需，见 §2.3-C）；
@@ -64,7 +64,7 @@
   - `install.sh/ps1`：锚定串替换、幂等、`.bak` 备份、`node --check` 验证、锚失配拒绝盲打。
 - **已知缺口**：README 提到 `install-preset.sh` 但仓库只有 `install-preset.ps1`（POSIX 版缺失）；preset 适配只支持 `standard` 源。
 
-### 2.2 legacy-bridges-plugin（host-plane 插件，~2700 行）
+### 2.2 旧版桥接插件（host-plane 插件，~2700 行）
 
 - **加载形态**：普通依赖 + profile `cordis.patch.yml` `- insert:` 行（当前 web profile 即此形态）。`apply(ctx, config)` zod-strict 校验（`lib/config.js`）。
 - **relay 模型**：bridge 子代理 = harness 可续续子代理 + 中继人格 + 只读 toolFilter（`allow: ['product_submit'(+ 'product_delegate')]`）。真实工作在远端 CLI。
@@ -100,7 +100,7 @@
 
 1. **live dsh = npx 缓存根** `~/.npm/_npx/1e7f6d9597241db0/`。`which dsh` → `<root>/node_modules/.bin/dsh`（符号链接）→ realpath → `<root>/node_modules/@deepseek-ai/dsh/lib/bin.js`。`~/.npm/_npx/` 下另有 **10 个 hash 目录**（外加 `bin`）——npx 重新解析依赖或缓存清理会**静默切换根目录**：旧根里打好的 cwd 补丁被整体弃用，**无任何报错**。
 2. **profile 树只有一枚符号链接**：`~/.dsh/profiles/web/node_modules/@deepseek-ai/` 仅 `dsh-tools` → npx 根。现有 `fix-dsh-tools-dedupe.sh` 用 `ls ~/.npm/_npx/*/... | tail -1` 选副本——**字典序最后一个，不保证是 `which dsh` 实际运行的根**，启发式脆弱。
-3. **插件仓库存在 `@deepseek-ai/*` 实体副本**（`legacy-bridges-plugin/node_modules/@deepseek-ai/` 下 18 个包：dsh-subagent、dsh-agent、dsh-session…，仅 `dsh-tools` 是指向 harness 的符号链接；npm ≥7 自动装 peer 所致）。⇒ 运行时**存在两份 `dsh-subagent` 模块实例**：harness 的（npx 根，提供 `ctx.subagents` 服务）与插件仓库的（插件 import 的解析目标）。cwd 补丁只需打在 **harness 侧副本**（npx 根）：子会话创建发生在 harness 的 `ctx.subagents` 服务里，插件仓库副本与 cwd 转发无关。
+3. **插件仓库存在 `@deepseek-ai/*` 实体副本**（`旧版桥接插件/node_modules/@deepseek-ai/` 下 18 个包：dsh-subagent、dsh-agent、dsh-session…，仅 `dsh-tools` 是指向 harness 的符号链接；npm ≥7 自动装 peer 所致）。⇒ 运行时**存在两份 `dsh-subagent` 模块实例**：harness 的（npx 根，提供 `ctx.subagents` 服务）与插件仓库的（插件 import 的解析目标）。cwd 补丁只需打在 **harness 侧副本**（npx 根）：子会话创建发生在 harness 的 `ctx.subagents` 服务里，插件仓库副本与 cwd 转发无关。
 4. **dsh-tools 单实例 Symbol 约束**（R2）：profile 与插件仓库**两处** `dsh-tools` 符号链接都必须指向 live npx 根；npx 换 hash 后链接悬空 → 所有工具调用报 `Cannot read properties of undefined (reading 'prepare')`。
 
 ---
@@ -213,7 +213,7 @@ interface SubagentDriver extends DriverInfo {
 ### 3.4 两后端如何映射到接口
 
 **NativeDriver（`lib/drivers/native.js`）**：
-- 包一层"请求组装器 + 结果 settle 器"，即 `legacy-cwd-plugin/lib/index.js` 的 execute 主体抽出为可复用模块（`resolvePersona`/`resolveModelRoute`/`assertCwd`/`settleForegroundRun`/`settleStart`/`stopReasonError` 迁入）。**零补丁原则**：per-call `agentOptions`/`persona`/`toolFilter`（及 `maxDepth`/`label`）全部走 rc.6 原生 request 字段（§2.1 证据链第 1 条）；仅 `cwd` 依赖 `request.cwd` 透传 + §6.4 补丁（stamp 的 **`native-verified`** 态放行；该态仅经 §6.4.2 白名单 + install 强制探针双必要条件写入，stamp 因门控可信）。
+- 包一层"请求组装器 + 结果 settle 器"，即 `旧版 cwd 插件/lib/index.js` 的 execute 主体抽出为可复用模块（`resolvePersona`/`resolveModelRoute`/`assertCwd`/`settleForegroundRun`/`settleStart`/`stopReasonError` 迁入）。**零补丁原则**：per-call `agentOptions`/`persona`/`toolFilter`（及 `maxDepth`/`label`）全部走 rc.6 原生 request 字段（§2.1 证据链第 1 条）；仅 `cwd` 依赖 `request.cwd` 透传 + §6.4 补丁（stamp 的 **`native-verified`** 态放行；该态仅经 §6.4.2 白名单 + install 强制探针双必要条件写入，stamp 因门控可信）。
 - `capabilities`：`{ cwd: true, persona: true, toolFilter: true, llmRoute: true, maxDepth: true, continuable: true, backgroundJob: true, durableResume: true }`；fork 实例 `inheritsParentContext: true`。
 - `progress`：session 折叠（复用 `lib/progress.js` 的 `foldProgress/foldTrace/foldTokenUsage`，native 子代理的 session 事件同样可折）+ `ctx.subagents.listChildren`。
 - 补丁就位检测：首次使用 `cwd` 时 grep 实例内 `dsh-subagent-in-process-driver` 是否含 `request.cwd` 标记（或记录安装脚本写入的 stamp 文件），未就位 → 明确错误指引跑 `patches/install`。
@@ -243,7 +243,7 @@ interface SubagentDriver extends DriverInfo {
 
 ### 4.1 结论：单包双面 —— bundle 型插件，一个 apply() 实例注册全部工具
 
-**形态**：`dsh-plugin-subagents` 声明 `dsh.bundle.patch → ./cordis.patch.yml`（沿 legacy-cwd-plugin 形态）。`dsh plugin add dsh-plugin-subagents` 后 reconcile 自动追加层序（§2.3-A），其 patch 层：
+**形态**：`dsh-plugin-subagents` 声明 `dsh.bundle.patch → ./cordis.patch.yml`（沿 旧版 cwd 插件 形态）。`dsh plugin add dsh-plugin-subagents` 后 reconcile 自动追加层序（§2.3-A），其 patch 层：
 
 ```yaml
 # 1) headless 形态：禁用官方委派工具行（web 形态下 web-app 层已禁用，此处幂等）
@@ -259,13 +259,13 @@ interface SubagentDriver extends DriverInfo {
       config:
         toolNames: { delegate: subagent, fork: subagent_fork }
         register: { delegate: true, fork: true, submit: true, progress: true, wait: true, roles: true, agents: true }
-        # 以下为 bridge 侧配置（与旧 legacy-bridges-plugin profile 行同构，迁移即拷贝）
+        # 以下为 bridge 侧配置（与旧 旧版桥接插件 profile 行同构，迁移即拷贝）
         idleTimeoutMs: 600000
         maxConcurrentChildren: 8
         # providers: { grok: { type: acp, command: grok, args: [agent, --always-approve, stdio] } }
 ```
 
-**为什么单实例**：`subagent_submit`（binding/registry/并发槽/idle 调度）与 `subagent`（委派入口）必须共享同一份内存状态；若拆多行加载多实例，状态割裂（legacy-bridges-plugin 的 `createBindings()` per-apply 注释即为此防御）。工具是否注册由 `register` 开关控制，默认全开。
+**为什么单实例**：`subagent_submit`（binding/registry/并发槽/idle 调度）与 `subagent`（委派入口）必须共享同一份内存状态；若拆多行加载多实例，状态割裂（旧版桥接插件 的 `createBindings()` per-apply 注释即为此防御）。工具是否注册由 `register` 开关控制，默认全开。
 
 **为什么必须 bundle 型而非纯 host-plane insert**：要在 headless 替换官方行必须 disable `tool-subagent`/`tool-subagent-fork`（§2.3-B3），而 disable 只能来自 patch 层 —— 包内 `cordis.patch.yml` 是唯一"安装即带、随包升级"的载体；host-plane insert 行做不到这件事。同时 bundle 行本身就是 host-plane Cordis 插件实例，两种身份兼得。
 
@@ -280,8 +280,8 @@ interface SubagentDriver extends DriverInfo {
 
 ### 4.3 与旧插件/同族插件的互斥
 
-- **移除旧 legacy-bridges-plugin**：安装本插件时从 profile `cordis.patch.yml` 删 `- id: legacy-bridges-plugin` 行 + `pnpm remove legacy-bridges-plugin`。不删则 `product_submit`/`product_delegate`/`product_roles` 等与新工具并存（全局层同名不冲突，但双份 bridge provider 名 `codex`/`claude-code`/`acp` **会在 `registerProvider` 处 fail loud**，进程起不来 —— 这是有意的强制互斥）。
-- **与 legacy-cwd-plugin / dsh-subagent-tools 互斥**：同为接管官方行的 bundle，双方都会尝试在全局层注册 `subagent` → duplicate error。README 用对齐 legacy-cwd-plugin 的"二选一"表格说明。
+- **移除旧版桥接插件**：安装本插件时从 profile `cordis.patch.yml` 删除其 insert 行并 `pnpm remove` 对应的旧包。不删则 `product_submit`/`product_delegate`/`product_roles` 等与新工具并存（全局层同名不冲突，但双份 bridge provider 名 `codex`/`claude-code`/`acp` **会在 `registerProvider` 处 fail loud**，进程起不来 —— 这是有意的强制互斥）。
+- **与 旧版 cwd 插件 / dsh-subagent-tools 互斥**：同为接管官方行的 bundle，双方都会尝试在全局层注册 `subagent` → duplicate error。README 用对齐 旧版 cwd 插件 的"二选一"表格说明。
 
 ---
 
@@ -328,7 +328,7 @@ provider           string  native 专属；子代理 provider 覆盖（默认实
 run_in_background  boolean 默认随 backgroundMode（delegate=continuable→true；fork=one-shot→false）
 ```
 
-输出 schema：`oneOf [{kind:'continuable', childId, backend, role?, permissionMode?}, {kind:'background', jobId}, {kind:'foreground', runId, output[]}]`；bridge 一次性路径映射为 `{kind:'foreground', output:[{type:'text',text}]}`（沿用旧 product_delegate 同步模式）。渲染沿 legacy-cwd-plugin 的 `outputValueText`。
+输出 schema：`oneOf [{kind:'continuable', childId, backend, role?, permissionMode?}, {kind:'background', jobId}, {kind:'foreground', runId, output[]}]`；bridge 一次性路径映射为 `{kind:'foreground', output:[{type:'text',text}]}`（沿用旧 product_delegate 同步模式）。渲染沿 旧版 cwd 插件 的 `outputValueText`。
 
 **校验次序**（execute 内，全部 loud）：
 1. role 解析（未知 role 报可用列表；省略 → `general`）；
@@ -420,7 +420,7 @@ assistant 消息发给父会话，是 dsh-subagent 包内部代码、插件不�
   register?: { delegate?: boolean; fork?: boolean; submit?: boolean; progress?: boolean; wait?: boolean; roles?: boolean; agents?: boolean }  // 默认全 true
   presetRow?: boolean          // preset 适配 L2 行载入时置 true：只注册本行 toolName，不注册 provider/辅助工具
   presetHints?: string[]       // 展开进 persona 参数 description
-  // —— native 委派默认（同官方/ legacy-cwd-plugin 行配置；作用于 delegate 工具，fork 可用 fork.* 覆盖）——
+  // —— native 委派默认（同官方/ 旧版 cwd 插件 行配置；作用于 delegate 工具，fork 可用 fork.* 覆盖）——
   provider?: string            // 默认 'spawn'
   enableRunInBackground?: boolean
   backgroundMode?: 'one-shot' | 'continuable'   // delegate 默认 continuable，fork 默认 one-shot（对齐官方 base 行）
@@ -429,7 +429,7 @@ assistant 消息发给父会话，是 dsh-subagent 包内部代码、插件不�
   toolFilter?: { allow?: string[]; deny?: string[] }
   maxDepth?: number | 'provider-managed'
   fork?: { provider?: string; backgroundMode?: 'one-shot' | 'continuable'; enableRunInBackground?: boolean; agentOptions?: object; persona?: string; toolFilter?: object; maxDepth?: number | 'provider-managed' }
-  // —— bridge（原 legacy-bridges-plugin 全量保留）——
+  // —— bridge（原 旧版桥接插件 全量保留）——
   providers?: Record<string, { type?: 'claude'|'codex'|'acp'; command?: string; args?: string[]; env?: Record<string,string>; timeoutMs?: number }>
   registryPath?: string        // 默认 ~/.dsh/subagents-registry.json
   idleTimeoutMs?: number       // 默认 600000
@@ -440,7 +440,7 @@ assistant 消息发给父会话，是 dsh-subagent 包内部代码、插件不�
 }
 ```
 
-strict：未知键 fail loud（含中文报错文案沿 legacy-bridges-plugin 风格）。`presetRow: true` 时 schema 分支校验为官方行形状（`provider/toolName/...`，见 §6.3-L2）。
+strict：未知键 fail loud（含中文报错文案沿 旧版桥接插件 风格）。`presetRow: true` 时 schema 分支校验为官方行形状（`provider/toolName/...`，见 §6.3-L2）。
 
 ### 6.2 角色 schema（`roles/*.json`，id = 文件名，未知 role 大声失败）
 
@@ -471,7 +471,7 @@ strict：未知键 fail loud（含中文报错文案沿 legacy-bridges-plugin �
 | `codex-full` | codex | full | true | bridge 示例：全权 codex |
 | `claude-readonly` | claude-code | readonly | false | bridge 示例：plan 模式审查 |
 
-（内置 `general` 兜底沿 legacy-bridges-plugin：rolesDir 缺失/无 general 时合成。）
+（内置 `general` 兜底沿 旧版桥接插件：rolesDir 缺失/无 general 时合成。）
 
 ### 6.3 preset 适配（两级）
 
@@ -480,7 +480,7 @@ strict：未知键 fail loud（含中文报错文案沿 legacy-bridges-plugin �
 2. 复制到 `$DSH_HOME/.agent-presets/<source>-subagents`（幂等：已含本插件标记则跳过）；
 3. **删除副本中的通用委派行**：`id: tool-subagent` / `tool-subagent-fork`（即 `name: '@deepseek-ai/dsh-tool-subagent'` 且 `toolName` 为 `subagent`/`subagent_fork` 的行）→ 全局层本插件工具直接可见（§2.3-B2 推论的逆向利用：删掉遮蔽者即可）；
 4. 写 `preset.yml`（name `<源名>+subagents`）；提示用户在 UI 切换（`recompose` 仅限空白会话，README 说明需新会话）。
-   —— 相比 legacy-cwd-plugin 的"改写行 name"方案，L1 不产生第二个插件实例，无状态割裂/重名风险；补 legacy-cwd-plugin 缺失的 POSIX 版。
+   —— 相比 旧版 cwd 插件 的"改写行 name"方案，L1 不产生第二个插件实例，无状态割裂/重名风险；补 旧版 cwd 插件 缺失的 POSIX 版。
 
 **L2（opt-in，`--enhance-rows`，服务 orchestrator 类 preset）**：**只改写 presetRow 能诚实承载的行，其余官方行一律删除**：
    - **改写**（`name: '@deepseek-ai/dsh-tool-subagent'` 且 `provider: 'spawn'` 且 `toolName` 非 `subagent`/`subagent_fork`）→ `name: 'dsh-plugin-subagents'` + 追加 `presetRow: true`，其余 config 键全保留（官方行 config 是本插件 Config 的子集，红线 9）；
@@ -585,8 +585,8 @@ C. stamp：<pkg>/patches/.applied（dsh 版本、live 根路径、A/B 各自结�
 # 1. 安装（自动追加 bundle 层并禁用官方行）
 dsh plugin --profile web add dsh-plugin-subagents     # 或 add <本地路径>
 # 2. 移除旧插件（D3；防 provider 重名 fail loud）
-#    - 编辑 ~/.dsh/profiles/web/cordis.patch.yml 删除 - id: legacy-bridges-plugin 行
-#    - cd ~/.dsh/profiles/web && pnpm remove legacy-bridges-plugin
+#    - 编辑 ~/.dsh/profiles/web/cordis.patch.yml 删除旧插件的 insert 行
+#    - cd ~/.dsh/profiles/web && pnpm remove 对应的旧插件包
 # 3. 【必跑】dsh-tools 单实例修复 + cwd 补丁（两段式，见 §6.4.2）
 #    A 段（链接修复）= R2 硬失效缓解：强制执行、先于补丁、不受补丁失败阻塞
 #    B 段（cwd 补丁）= 可选能力；不需要 per-call cwd 时用 --links-only 只跑 A 段
@@ -600,7 +600,7 @@ dsh plugin --profile web add dsh-plugin-subagents     # 或 add <本地路径>
 
 > 旧 `fix-dsh-tools-dedupe.sh` / `scripts/link-harness-dsh-tools.sh` 的职责已被第 3 步吸收（且修掉了其 `ls | tail -1` 选根启发式，§6.4.1）；`npm run setup:peer` 保留为开发期别名，内部委托同一逻辑。
 
-**dsh 升级 / npx 缓存漂移后**：重跑第 3 步（live 根变了 → 补丁与新根、符号链接一并重打/重指；npx 换 hash 时旧根补丁被静默弃用，见 §2.4-1/§6.4.5），或先第 4 步体检确认；preset 副本在 DSH_HOME 下不受影响。bundle 层与 peerDependencies 版本契约同 legacy-cwd-plugin（`^0.1.0-rc.6` 一组 peer）。
+**dsh 升级 / npx 缓存漂移后**：重跑第 3 步（live 根变了 → 补丁与新根、符号链接一并重打/重指；npx 换 hash 时旧根补丁被静默弃用，见 §2.4-1/§6.4.5），或先第 4 步体检确认；preset 副本在 DSH_HOME 下不受影响。bundle 层与 peerDependencies 版本契约同 旧版 cwd 插件（`^0.1.0-rc.6` 一组 peer）。
 
 ### 6.6 旧 registry 迁移与 legacy 别名
 
@@ -622,8 +622,8 @@ dsh-plugin-subagents/
 │   │   ├── types.js          # SubagentDriver 契约注释 + capability 常量（JSDoc 承载 §3.2 签名）
 │   │   ├── native.js         # NativeDriver（spawn/fork 两实例）：请求组装 + settle + progress
 │   │   └── bridge.js         # BridgeDriver：relay 组装、binding/registry 持有、三路由
-│   ├── native-delegate.js    # 自 legacy-cwd-plugin 迁移的纯函数：resolvePersona/resolveModelRoute/assertCwd/settle*/stopReasonError/输出渲染
-│   ├── bridges/              # 自 legacy-bridges-plugin 原样迁移：claude.js / codex.js / acp.js
+│   ├── native-delegate.js    # 自 旧版 cwd 插件 迁移的纯函数：resolvePersona/resolveModelRoute/assertCwd/settle*/stopReasonError/输出渲染
+│   ├── bridges/              # 自 旧版桥接插件 原样迁移：claude.js / codex.js / acp.js
 │   ├── providers.js          # buildProviders/createBridgeFor/providerPersona（文案 subagent_submit 化）
 │   ├── roles.js              # + backend/overrides 字段
 │   ├── registry.js           # 默认路径改 ~/.dsh/subagents-registry.json；条目 + backend
@@ -646,7 +646,7 @@ dsh-plugin-subagents/
 ├── test/                     # node:test；fake bridge / fakeCtx / fakeDriver；不碰真实 CLI
 ├── docs/DESIGN.md  docs/TASKS.md
 ├── README.md  README.zh.md  CHANGELOG.md  AGENTS.md  LICENSE  SECURITY.md
-└── .github/workflows/ci.yml  publish.yml   # 沿 legacy-bridges-plugin 矩阵
+└── .github/workflows/ci.yml  publish.yml   # 沿 旧版桥接插件 矩阵
 ```
 
 ---
@@ -656,9 +656,9 @@ dsh-plugin-subagents/
 | # | 风险 | 依据 | 缓解 |
 |---|---|---|---|
 | R1 | **cwd 补丁双重失效面**：(i) rc.6 锚点耦合（dsh 升级改写 bundle → 锚失配）；(ii) **npx 缓存漂移**（`~/.npm/_npx/` 已有 10 个 hash 目录，重解析后 live 根静默切换，旧根补丁被弃用且无报错） | §2.1；§2.4-1 实测 | install B 段四态状态机（§6.4.2：which-dsh 动态解析根 → 逐枚判定 a/b/c/d；d 漂移 loud；**c 原生支持降级须白名单 + install 强制行为探针双必要条件（stamp 只记 `native-verified`，白名单误录无法单独放行；d1/d2 分型报出不同 remediation），锚失配后禁止全文 grep 判据** —— 防「误判 native → stamp 放行 → cwd 静默失效」的假阴性面）；verify 体检（§6.4.3 检查 b）非零退出 + 修复提示；启动时 cwd 能力检测（stamp 优先）给指引；README 失效模式必写（§6.4.5）；发布流程含新版本锚点验证任务 |
-| R2 | **dsh-tools 双实例 Symbol 陷阱**：`TOOL_RUNTIME_SCHEDULER` 模块级 Symbol，第二物理副本 → 所有工具调用死 `reading 'prepare'`；且漂移面有**两处**链接（profile + 插件仓库），npx 换 hash 后双双悬空；旧 dedupe 脚本 `ls \| tail -1` 选根不保证是运行根 | §2.4-2/4 实测；legacy-bridges-plugin `scripts/link-harness-dsh-tools.sh` 注释 | install **A 段强制先行**修复两处链接，先于补丁、不受补丁失败阻塞（§6.4.2 两段式；根来源 = which-dsh 解析，非启发式 §6.4.1；`--links-only` 供只要 dedupe 不要 cwd 的场景）；verify 检查 c；README 安装第 3 步标注必跑；`apply()` 启动自检：本实例 Symbol 取 scheduler 为 undefined → logger.fatal 指引 dedupe |
+| R2 | **dsh-tools 双实例 Symbol 陷阱**：`TOOL_RUNTIME_SCHEDULER` 模块级 Symbol，第二物理副本 → 所有工具调用死 `reading 'prepare'`；且漂移面有**两处**链接（profile + 插件仓库），npx 换 hash 后双双悬空；旧 dedupe 脚本 `ls \| tail -1` 选根不保证是运行根 | §2.4-2/4 实测；旧版桥接插件 `scripts/link-harness-dsh-tools.sh` 注释 | install **A 段强制先行**修复两处链接，先于补丁、不受补丁失败阻塞（§6.4.2 两段式；根来源 = which-dsh 解析，非启发式 §6.4.1；`--links-only` 供只要 dedupe 不要 cwd 的场景）；verify 检查 c；README 安装第 3 步标注必跑；`apply()` 启动自检：本实例 Symbol 取 scheduler 为 undefined → logger.fatal 指引 dedupe |
 | R3 | **bundle（patch 层）与 host-plane 双机制维护成本**：disable 依赖行 id 稳定性；web-app 层序假设 | §2.3-A/C | patch 只引用 `dsh-base` 行 id（`tool-subagent`/`tool-subagent-fork`，rc 内稳定）；CI 加 `dsh --dump-config` 冒烟（可选）；每次 dsh 升级跑回归清单（TASKS T19） |
-| R4 | **工具名接管冲突**：与 legacy-cwd-plugin/tools 双装 → 全局层 `subagent` duplicate error；与旧 legacy-bridges-plugin 双装 → provider 名 duplicate error | §4.3 | fail loud 本身是强制互斥（可接受）；README "二选一"表 + 安装命令里显式卸载步骤；错误信息可读化 |
+| R4 | **工具名接管冲突**：与 旧版 cwd 插件/tools 双装 → 全局层 `subagent` duplicate error；与旧 旧版桥接插件 双装 → provider 名 duplicate error | §4.3 | fail loud 本身是强制互斥（可接受）；README "二选一"表 + 安装命令里显式卸载步骤；错误信息可读化 |
 | R5 | **preset 布局耦合**：L1 删除行依赖 standard 的行 id/结构；L2 依赖官方行 config 与本插件 Config 超集兼容 | §2.3-D | 适配脚本锚定 `name: '@deepseek-ai/dsh-tool-subagent'` + `toolName` 字段而非行 id；Config 永远保持官方超集（回归测试断言 schema 兼容）；锚失配 loud |
 | R6 | **未适配 standard preset 的降级形态**：root 只有官方 subagent（无 bridge 入口） | §4.2 | `subagent_agents` 会显示 bridge 可用但入口被遮蔽 → 工具 description 提示跑 preset 适配；README 矩阵表 |
 | R7 | **旧 durable relay 子代理恢复**：toolFilter 白名单指向已退役工具名 | §6.6 | registry 迁移 + auto legacy 别名（product_submit/product_delegate）；别名随旧条目消亡可关 |
@@ -667,7 +667,7 @@ dsh-plugin-subagents/
 
 ---
 
-## 9. 设计红线（继承 legacy-bridges-plugin AGENTS.md 7 条 + 新增 5 条）
+## 9. 设计红线（继承 旧版桥接插件 AGENTS.md 7 条 + 新增 5 条）
 
 1. relay 模型永远只读管道：子代理 toolFilter 只含 `subagent_submit`（+ 角色允许时的 `subagent`）。
 2. permissionMode 只作用于远端产品，映射产品自有 CLI flag。

@@ -8,7 +8,7 @@
 // ctx.tools / ctx.subagents / ctx.systemPrompt（ctx.logger 免声明；
 // ctx.get('sessions') / ctx.get('jobs') 是惰性访问器，免声明），但 inject 原是
 // `['subagents','tools','sessions']` —— sessions 零访问、systemPrompt 缺失。
-// 前身 legacy-cwd-plugin 的正确声明是 `['tools','subagents','systemPrompt']`。
+// 旧版 cwd 插件的正确声明是 `['tools','subagents','systemPrompt']`。
 //
 // 两道防线：
 //   (a) 静态扫描 —— 读 lib/index.js 的 inject 数组，grep lib/ 全部直接属性访问，

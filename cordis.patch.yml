@@ -15,8 +15,8 @@
 #   安装/使用详见 README。
 #
 # 互斥：本插件接管官方委派工具名，与同族 bundle 插件互斥，只能二选一 ——
-#   安装前必须卸载 / 停用 legacy-cwd-plugin、dsh-subagent-tools，并从 profile
-#   的 cordis.patch.yml 移除旧的 legacy-bridges-plugin insert 行；
+#   安装前必须卸载 / 停用 dsh-subagent-tools 及其他接管同名工具的旧 bundle，并从
+#   profile 的 cordis.patch.yml 移除旧插件的 insert 行；
 #   否则多个 bundle 同时向全局层注册 `subagent` 会 duplicate error fail loud
 #   （bridge provider 名 codex/claude-code/acp 重复注册也会 fail loud）。
 #   互斥表格见 README「二选一」。
@@ -35,7 +35,7 @@
       name: dsh-plugin-subagents
       config:
         # —— 仅列出显式默认（其余键省略，走 lib/config.js zod strict 默认）——
-        # bridge 并发治理（与旧 legacy-bridges-plugin profile 行同构，迁移即拷贝）。
+        # bridge 并发治理（与旧版桥接插件 profile 行同构，迁移即拷贝）。
         idleTimeoutMs: 600000          # 子代理 idle 多久后释放远端资源（毫秒）；bridge 生命周期用
         maxConcurrentChildren: 8       # bridge 并发槽上限；native 后台走 harness jobs,不自治理
         # relay 回合闭环校验（D2b，默认开启）：relay 子代理本回合未调
