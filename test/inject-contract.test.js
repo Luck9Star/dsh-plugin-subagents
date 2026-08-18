@@ -23,11 +23,21 @@
 // registry 路径均注入 tmp）。
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { readFileSync, mkdtempSync, rmSync, writeFileSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { globSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { apply } from '../lib/index.js'
+
+/** 递归收集目录下全部 .js 文件（fs.globSync 是 node 22+ API，手写遍历以兼容 18/20）。 */
+function listJsRecursive(dir, out = []) {
+  for (const ent of readdirSync(dir, { withFileTypes: true })) {
+    const p = join(dir, ent.name)
+    if (ent.isDirectory()) listJsRecursive(p, out)
+    else if (ent.isFile() && ent.name.endsWith('.js')) out.push(p)
+  }
+  return out
+}
 
 const IS_WIN = process.platform === 'win32'
 
@@ -61,7 +71,7 @@ function readInjectArray() {
 function countDirectAccess(service) {
   const re = new RegExp(`ctx\\.${service}\\b`, 'g')
   let count = 0
-  const files = globSync('**/*.js', { cwd: new URL('../lib/', import.meta.url) }).map((f) => new URL(`../lib/${f}`, import.meta.url))
+  const files = listJsRecursive(fileURLToPath(new URL('../lib/', import.meta.url)))
   for (const file of files) {
     for (const raw of readFileSync(file, 'utf8').split(/\r?\n/)) {
       const line = raw.trim()

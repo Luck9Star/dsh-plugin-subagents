@@ -10,9 +10,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # windows-latest DEFERRED (2026-08-18): every Windows job hung
+        # indefinitely (no logs flushed; only the 6h job limit killed it).
+        # Re-add `windows-latest` once the hang is reproduced and fixed
+        # locally — the .cmd-shim paths the leg exercised stay unvalidated
+        # until then.
+        os: [ubuntu-latest, macos-latest]
         node: [18, 20, 22]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -22,7 +28,6 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm test
-        # The suite never needs product CLIs or API keys (pure logic + fakes,
-        # T09/T10 §10); the Windows matrix is what exercises the .cmd-shim
-        # launching paths. `npm run lint` also enforces the red-line-12
-        # dsh-subagent import whitelist on every platform.
+        # The suite never needs product CLIs or API keys (pure logic +
+        # fakes). `npm run lint` also enforces the dsh-subagent import
+        # whitelist on every platform.

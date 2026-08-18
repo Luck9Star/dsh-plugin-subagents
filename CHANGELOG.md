@@ -37,6 +37,19 @@ official `subagent` / `subagent_fork` tool names.
 
 ### CI (2026-08-18)
 
+- CI green again on node 18/20: the patch-script fixtures' package.json now
+  declare `"type": "module"` exactly like the real `@deepseek-ai` packages
+  (without it, node < 22 parses the fixture ESM libs as CJS —
+  `Unexpected token 'export'` — and every install/verify/probe test fails;
+  node 22+ only passed via default module syntax detection), and
+  test/inject-contract.test.js walks `lib/` with a recursive readdir
+  instead of the node-22-only `fs.globSync`. Full suite: 480/480 on node
+  18 and node 24 locally.
+- windows-latest leg DEFERRED: every Windows job hung indefinitely (no
+  logs flushed; only the 6h job limit killed it). Removed from the matrix
+  until the hang is reproduced and fixed; `timeout-minutes: 15` added as a
+  runaway guard. `install.ps1` / `verify.ps1` still ship — Windows
+  validation is manual until the leg returns.
 - Added gitleaks secret scanning: `.github/workflows/gitleaks.yml` (full
   history scan on every push/PR) and `.pre-commit-config.yaml` for local
   commits; matches the gateway-provider repo's setup.

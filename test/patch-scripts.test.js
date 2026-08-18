@@ -40,7 +40,10 @@ function writeIf(path, content) {
 }
 
 function pkgJson(name, version) {
-  return `${JSON.stringify({ name, version }, null, 2)}\n`
+  // Real @deepseek-ai packages ship `"type": "module"` — without it node < 22
+  // parses the fixture ESM libs as CJS (`Unexpected token 'export'`); node 22+
+  // only gets away via default module syntax detection.
+  return `${JSON.stringify({ name, version, type: 'module' }, null, 2)}\n`
 }
 
 // Legal-JS stand-ins for the two patch targets. The anchor/marker lines are
