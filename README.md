@@ -2,6 +2,10 @@
 
 **English** | [简体中文](README.zh.md)
 
+> **DSH compatibility:** `0.1.0-rc.7` (npm latest) and `0.1.0-rc.6` —
+> `peerDependencies: ^0.1.0-rc.6` satisfies `rc.7` under semver (same-tuple
+> prerelease rule). Node ≥ 18. MIT.
+
 The unified subagent plugin for the DeepSeek Harness: one `subagent*` tool
 family over two backends — **native in-process subagents** with per-call
 overrides (including `cwd`), and **external agent CLIs** (Claude Code, Codex,
@@ -60,8 +64,12 @@ and `legacy-bridges-plugin` (see [Mutual exclusion](#mutual-exclusion-choose-one
 
 ## Requirements
 
-- DeepSeek Harness `0.1.0-rc.6` (the `peerDependencies` lock the
-  `^0.1.0-rc.6` family).
+- DeepSeek Harness `0.1.0-rc.7` (npm latest) or `0.1.0-rc.6` — verified
+  code-level compatible with both. The `peerDependencies` lock the
+  `^0.1.0-rc.6` family, which satisfies `rc.7` under semver's same-tuple
+  prerelease rule (`^0.1.0-rc.6` accepts `0.1.0-rc.7`; it stops matching at
+  `0.1.1-rc.x`). The cwd patches' anchors exist verbatim and uniquely in
+  `rc.7`, exactly as in `rc.6`.
 - Node ≥ 18.
 - For bridge backends only: at least one CLI on `PATH` and authenticated —
   `claude`, `codex`, `grok`, or any ACP CLI. Native-only deployments need
@@ -142,7 +150,7 @@ Step notes:
 ### Local development install
 
 ```sh
-git clone <this repository> && cd dsh-plugin-subagents
+git clone https://github.com/Luck9Star/dsh-plugin-subagents && cd dsh-plugin-subagents
 npm install
 npm run setup:peer     # symlink the RUNNING harness's dsh-tools into node_modules/
 dsh plugin --profile web add "$(pwd)"
@@ -300,6 +308,13 @@ Role files live in `rolesDir` as JSON; the role id IS the file basename.
 Unknown role ids fail loudly (listing the available roles); only an omitted
 role defaults to `general` (synthesized if the library is missing one).
 
+Roles are orthogonal to the harness's official agent presets
+(`dsh-agent-presets`, an rc.7 capability): a role shapes how this plugin
+delegates (backend, permission mode, native overrides), while a preset is a
+persona bundle the child's `persona` may reference via `@preset:<id>` — the
+plugin's persona seam resolves the reference. No migration either way; the
+two compose freely.
+
 ```jsonc
 {
   "description": "When to use this role (shown to the delegating model)",
@@ -397,6 +412,19 @@ global instance provides the seam; a preset-row-only deployment keeps
 `ctx.get('subagentsDispatch')` undefined (stateless, red line 10). See
 [docs/dispatch-seam.md](docs/dispatch-seam.md) for the full design record.
 
+**Companion repos.** Two sibling plugins consume this plugin's seams and are
+designed to combine with it:
+
+- [dsh-dag-orchestrator](https://github.com/Luck9Star/dsh-dag-orchestrator) —
+  DAG task orchestration over worktree-isolated tasks; its execution layer
+  binds to this plugin's dispatch seam / subagent tool family, and its
+  worktree tasks rely on this plugin forwarding `request.cwd` to per-task
+  worktree directories.
+- [dsh-worktrees](https://github.com/Luck9Star/dsh-worktrees) — parallel
+  write isolation with a serial merge queue; its composition examples pass
+  this plugin's per-call `cwd` parameter to point a delegated subagent at a
+  worktree.
+
 ## Upgrading dsh / npx cache drift
 
 A dsh installed through npx lives in an npx cache root
@@ -439,6 +467,35 @@ shipped inside the npm tarball — now excluded from the files whitelist), a
 pre-drift stamp after an npx cache switch, or a stamp missing its `liveRoot`
 record all fail loudly with a pointer to re-run `install.sh`.
 
+### Same-path npx refresh: the silent cwd failure to watch for
+
+The root-switch drift above fails **loudly** (stamp `liveRoot` mismatch,
+dangling links). A different npx behavior fails **silently** and is the one
+case the stamp gate cannot catch:
+
+npx can refresh the cache **in place** — same `~/.npm/_npx/<hash>/` path,
+re-resolved dependencies, replaced files. The stamp's `liveRoot` still matches
+(the path never changed) and still records `applied` states, so the cwd gate
+passes — but the freshly replaced harness files carry no patches, so
+`request.cwd` is silently dropped: the child runs in the parent's cwd and the
+task is recorded as successful.
+
+- **Symptom:** after upgrading or refreshing dsh (e.g. a new
+  `@deepseek-ai/dsh` release re-resolved into the same cache slot), per-call
+  `cwd` stops having any effect — no error, children just run in the parent
+  cwd.
+- **Recovery:** re-run `./patches/install.sh` (idempotent: it re-applies both
+  patches against the current files, keeps a `.bak_cwd` backup, and
+  `node --check`-verifies each target before committing). One run restores
+  per-call `cwd`; restart dsh and open a new session.
+- **Verify:** `./patches/verify.sh` re-checks both patch anchors;
+  `--probe` re-runs the behavioral cwd probe through the live subagent path.
+- **Known limitation / discipline:** the stamp gate validates the two patch
+  states and the `liveRoot` path, but does not compare `dshVersion` or file
+  mtimes against the stamp — an in-place refresh leaves both looking healthy.
+  Treat **re-running `install.sh` after every dsh upgrade/refresh** as
+  standing discipline, not an optional step.
+
 ## Design notes
 
 Full detail in [docs/DESIGN.md](docs/DESIGN.md); the short version:
@@ -453,16 +510,16 @@ Full detail in [docs/DESIGN.md](docs/DESIGN.md); the short version:
   and throws loudly on mismatch — no silent degradation. Lifecycle vocabulary
   reuses the harness seam (`subagent/start|end` events, `stopReason` words,
   `AbortError` / `TimeoutError`).
-- **Why the cwd patches exist.** rc.6 has no per-call `cwd` field on
-  `SubagentStartRequest` — while per-call `model` / `provider` / `persona` /
-  `toolFilter` ARE native request fields and need no patch. Only `cwd` needs
-  help: exactly two minimal anchored patches, one per child-creation merge
+- **Why the cwd patches exist.** Neither rc.6 nor rc.7 has a per-call `cwd`
+  field on `SubagentStartRequest` — while per-call `model` / `provider` /
+  `persona` / `toolFilter` ARE native request fields and need no patch. Only
+  `cwd` needs help: exactly two minimal anchored patches, one per child-creation merge
   point (the one-shot driver package `dsh-subagent-in-process-driver`, and
   the continuable manager inlined in the `dsh-subagent` bundle). The installer
   drives a per-patch four-state machine — applied / idempotent /
   `native-verified` / loud drift — where "dsh now supports it natively" can
   only be recorded after a **hard double gate**: a manually-verified version
-  whitelist (initially empty for rc.6) AND a behavioral probe that observes
+  whitelist (initially empty for rc.6/rc.7) AND a behavioral probe that observes
   the child session's `meta.cwd` through the live subagent path. Both are
   necessary; failure of either is loud (d1 anchor drift → new plugin release;
   d2 unverified-native → `verify --probe`). This is what keeps a silent-cwd

@@ -12,6 +12,45 @@ First release. `dsh-plugin-subagents` unifies and fully replaces
 `legacy-bridges-plugin` (external agent bridges) in one plugin that
 takes over the official `subagent` / `subagent_fork` tool names.
 
+### Documentation (2026-08-18)
+
+- Both READMEs (`README.md` / `README.zh.md`) updated in lockstep, kept
+  section-for-section aligned:
+  - **rc.7 compatibility declared.** Requirements and the header now state
+    compatibility with DSH `0.1.0-rc.7` (npm latest) alongside `rc.6`, that
+    `peerDependencies: ^0.1.0-rc.6` satisfies `rc.7` under semver's
+    same-tuple prerelease rule (and stops matching at `0.1.1-rc.x`), and
+    that the two cwd patch anchors exist verbatim and uniquely in rc.7
+    exactly as in rc.6. Removed the rc.6-only phrasing in the design notes
+    ("rc.6 has no per-call cwd field" → "neither rc.6 nor rc.7 has").
+    Compatibility verified before writing: the full suite passes 480/480
+    with the rc.7 live root on this machine.
+  - **New "Same-path npx refresh" subsection** (Upgrading dsh / npx cache
+    drift, both languages): documents the one silent failure mode the stamp
+    gate cannot catch — npx refreshing the cache in place (same
+    `~/.npm/_npx/<hash>/` path, stamp `liveRoot` still matches, gate
+    passes, but the replaced files carry no patches → `cwd` silently
+    dropped). Covers the symptom (per-call `cwd` stops having any effect
+    after a dsh upgrade/refresh), recovery (re-run `patches/install.sh` —
+    idempotent, `.bak_cwd` backup, `node --check` verification),
+    verification (`verify.sh` / `--probe`), and the known limitation made
+    explicit as standing discipline: the stamp gate validates patch states
+    + `liveRoot` but not `dshVersion`/mtimes, so re-run `install.sh` after
+    **every** dsh upgrade/refresh.
+  - **Companion repos linked.** The dispatch-seam section now links
+    [dsh-dag-orchestrator](https://github.com/Luck9Star/dsh-dag-orchestrator)
+    (its worktree tasks rely on this plugin forwarding `request.cwd`) and
+    [dsh-worktrees](https://github.com/Luck9Star/dsh-worktrees) (its
+    composition examples use this plugin's per-call `cwd`), as absolute
+    GitHub URLs — the sibling repos each live in their own repository. The
+    local-development clone command now uses the GitHub URL.
+  - **Roles vs. agent presets clarified.** The Roles section now states
+    explicitly that `roles/` and the harness's official `dsh-agent-presets`
+    (an rc.7 capability) are orthogonal: a role shapes how this plugin
+    delegates, a preset is a persona bundle the child's `persona` may
+    reference via `@preset:<id>` (resolved by this plugin's persona seam);
+    they compose freely with no migration either way.
+
 ### Fixed (2026-08-18 audit round)
 
 - **E-1/C-1 (P1): the cwd gate could be satisfied by a foreign `.applied`

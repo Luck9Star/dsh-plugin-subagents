@@ -2,6 +2,8 @@
 
 [English](README.md) | **简体中文**
 
+> **DSH 兼容性：** `0.1.0-rc.7`（npm latest）与 `0.1.0-rc.6` —— 经代码级核实两者均兼容。`peerDependencies: ^0.1.0-rc.6` 在 semver 下满足 `rc.7`（同 tuple prerelease 规则）。Node ≥ 18。MIT。
+
 DeepSeek Harness 的统一子代理插件：一套 `subagent*` 工具族覆盖两类后端 —— **原生进程内子代理**（支持含 `cwd` 在内的逐次调用覆盖）与**外部 Agent CLI**（Claude Code、Codex、Grok、任意 ACP agent，作为持久、可续聊的 bridge 子代理）。插件接管官方 `subagent` / `subagent_fork` 工具名，模型习惯零迁移；**完全取代** `legacy-cwd-plugin` 与 `legacy-bridges-plugin`（见[互斥](#互斥二选一)）。
 
 ## 功能
@@ -17,7 +19,7 @@ DeepSeek Harness 的统一子代理插件：一套 `subagent*` 工具族覆盖�
 
 ## 环境要求
 
-- DeepSeek Harness `0.1.0-rc.6`（`peerDependencies` 锁定 `^0.1.0-rc.6` 版本族）。
+- DeepSeek Harness `0.1.0-rc.7`（npm latest）或 `0.1.0-rc.6` —— 经代码级核实两者均兼容。`peerDependencies` 锁定 `^0.1.0-rc.6` 版本族，在 semver 的同 tuple prerelease 规则下满足 `rc.7`（`^0.1.0-rc.6` 接受 `0.1.0-rc.7`；到 `0.1.1-rc.x` 起不再满足）。两枚 cwd 补丁的锚点在 `rc.7` 中逐字存在且唯一，与 `rc.6` 完全一致。
 - Node ≥ 18。
 - 仅 bridge 后端需要：至少一个 CLI 在 `PATH` 上且已登录 —— `claude`、`codex`、`grok` 或任意 ACP CLI。纯 native 部署一个都不需要。
 
@@ -57,7 +59,7 @@ dsh --profile web
 ### 本地开发安装
 
 ```sh
-git clone <this repository> && cd dsh-plugin-subagents
+git clone https://github.com/Luck9Star/dsh-plugin-subagents && cd dsh-plugin-subagents
 npm install
 npm run setup:peer     # 把正在运行的 harness 的 dsh-tools 链进 node_modules/
 dsh plugin --profile web add "$(pwd)"
@@ -180,6 +182,8 @@ bridge（自前身全量保留）：
 
 角色文件是 `rolesDir` 下的 JSON；角色 id 就是文件名。未知角色 id 大声报错（列出可用角色）；只有省略 role 才默认 `general`（角色库缺失 general 时自动合成兜底）。
 
+角色（roles/）与 harness 官方 agent presets（`dsh-agent-presets`，rc.7 能力）是正交概念：角色塑造本插件的委派方式（后端、权限档、native overrides），preset 则是子代理 `persona` 可经 `@preset:<id>` 引用的人格包 —— 引用由本插件的 persona 缝解析。两个方向都无需迁移，可自由组合。
+
 ```jsonc
 {
   "description": "何时用此角色（展示给委派模型）",
@@ -268,6 +272,11 @@ one-shot 没有 `outputSchema` 概念，bridge 任务上不要声明结构化 `o
 `ctx.get('subagentsDispatch')` 恒为 undefined（无状态，红线 10）。完整设计
 记录见 [docs/dispatch-seam.md](docs/dispatch-seam.md)。
 
+**姊妹仓库。** 两个同族插件消费本插件的缝，并设计与本插件组合使用：
+
+- [dsh-dag-orchestrator](https://github.com/Luck9Star/dsh-dag-orchestrator) —— 基于 worktree 隔离任务的 DAG 编排；其执行层绑定本插件的派发缝 / subagent 工具族，其 worktree 任务依赖本插件把 `request.cwd` 转发到各任务的 worktree 目录。
+- [dsh-worktrees](https://github.com/Luck9Star/dsh-worktrees) —— 并行写隔离 + 串行 merge queue；其组合示例把本插件的逐次调用 `cwd` 参数指向某个 worktree，让被委派的子代理在该 worktree 中工作。
+
 ## 升级 dsh / npx 缓存漂移
 
 经 npx 安装的 dsh 住在 npx 缓存根（`~/.npm/_npx/<hash>/`）里。npx 重新解析依赖或缓存清理时，live 根会**静默切换** —— 旧根（连同打好的 cwd 补丁）被整体弃用且毫无报错，`dsh-tools` 符号链接则变成悬空。两个症状（DESIGN §6.4.5）：
@@ -288,12 +297,23 @@ one-shot 没有 `outputSchema` 概念，bridge 任务上不要声明结构化 `o
 
 stamp 门控自身也在做同样的动态校验：`patches/.applied` 只对它点名的那一个 live 根有证明力，所以 native 驱动每次放行 `cwd` 前都会把 stamp 里的 `liveRoot` 与「当前根」比对 —— 当前根在 JS 侧按 `resolve-root.sh` 同一套逻辑解析（从本插件实际链入的 `@deepseek-ai/dsh-tools` peer 的真实落点上溯到 `node_modules` 的父目录）。外来 stamp（历史上曾随 npm tarball 泄漏，现已从打包白名单排除）、npx 漂移后的旧 stamp、缺失 `liveRoot` 字段的残缺 stamp，一律 loud 失败并指引重跑 `install.sh`。
 
+### 同路径 npx 原地刷新：需警惕的 cwd 静默失效
+
+上面的换根漂移是**大声**失败（stamp `liveRoot` 失配、链接悬空）。npx 的另一种行为则**静默**失败，是 stamp 门控唯一防不住的情形：
+
+npx 可能在**同一路径原地刷新**缓存 —— `~/.npm/_npx/<hash>/` 路径不变、依赖重新解析、文件被替换。stamp 里的 `liveRoot` 仍然匹配（路径从未变过）、补丁状态仍记 `applied`，cwd 门控因此放行 —— 但被替换的新 harness 文件上没有补丁，`request.cwd` 被静默丢弃：子代理回退到父会话的 cwd 运行，任务还被记成成功。
+
+- **症状：** 升级 / 刷新 dsh 后（例如新版 `@deepseek-ai/dsh` 被重新解析进同一个缓存槽位），逐次调用 `cwd` 不再有任何效果 —— 无报错，子代理就是跑在父 cwd 上。
+- **恢复：** 重跑 `./patches/install.sh`（幂等：对当前文件重新应用两枚补丁、保留 `.bak_cwd` 备份、提交前对每个目标跑 `node --check` 校验）。跑一次即恢复逐次调用 `cwd`；重启 dsh、开新会话。
+- **核实：** `./patches/verify.sh` 复查两枚补丁锚点；`--probe` 经 live 子代理路径重跑行为探针。
+- **已知局限 / 纪律：** stamp 门控校验两枚补丁状态与 `liveRoot` 路径，但不比对 stamp 里的 `dshVersion` 或文件 mtime —— 原地刷新后两者看起来都健康。请把**每次升级 / 刷新 dsh 后重跑 `install.sh`** 当作常设纪律，而不是可选项。
+
 ## 设计说明
 
 完整细节见 [docs/DESIGN.md](docs/DESIGN.md)；速览版：
 
 - **`SubagentDriver` 抽象。** 两类后端实现同一个 driver 接口；所有差异都显式化为能力标志（`cwd`、`persona`、`toolFilter`、`llmRoute`、`maxDepth`、`permissionMode`、`reasoningEffort`、`continuable`、`backgroundJob`、`durableResume`、`promptInjectionGuard`）。native 覆盖前一组；bridge 覆盖 `permissionMode` / `reasoningEffort` / `continuable` / `durableResume` / `promptInjectionGuard`。工具层按矩阵校验参数，不匹配即大声 throw —— 绝不静默降级。生命周期词汇复用 harness seam（`subagent/start|end` 事件、`stopReason` 词表、`AbortError` / `TimeoutError`）。
-- **cwd 补丁为什么存在。** rc.6 的 `SubagentStartRequest` 没有逐次调用的 `cwd` 字段 —— 而逐次调用的 `model` / `provider` / `persona` / `toolFilter` 都是原生 request 字段、无需补丁。只有 `cwd` 需要帮助：恰好两枚最小锚定补丁，各打一个建子路径的合并点（one-shot 驱动独立包 `dsh-subagent-in-process-driver`，与 `dsh-subagent` bundle 内联的 continuable 管理器）。安装器对每枚补丁跑四态状态机 —— applied / 幂等 / `native-verified` / 大声漂移 —— 其中「dsh 已原生支持」只能经**硬双闸**记入：人工核实的版本白名单（rc.6 初始为空）AND 经 live 子代理路径实测子会话 `meta.cwd` 的行为探针。两闸缺一不可；任一失败都大声报错（d1 锚失配漂移 → 需新版本插件；d2 白名单未证实 → `verify --probe`）。正是这道闸让「cwd 静默失效」永远不会被误判成原生支持。
+- **cwd 补丁为什么存在。** rc.6 与 rc.7 的 `SubagentStartRequest` 都没有逐次调用的 `cwd` 字段 —— 而逐次调用的 `model` / `provider` / `persona` / `toolFilter` 都是原生 request 字段、无需补丁。只有 `cwd` 需要帮助：恰好两枚最小锚定补丁，各打一个建子路径的合并点（one-shot 驱动独立包 `dsh-subagent-in-process-driver`，与 `dsh-subagent` bundle 内联的 continuable 管理器）。安装器对每枚补丁跑四态状态机 —— applied / 幂等 / `native-verified` / 大声漂移 —— 其中「dsh 已原生支持」只能经**硬双闸**记入：人工核实的版本白名单（rc.6/rc.7 初始为空）AND 经 live 子代理路径实测子会话 `meta.cwd` 的行为探针。两闸缺一不可；任一失败都大声报错（d1 锚失配漂移 → 需新版本插件；d2 白名单未证实 → `verify --probe`）。正是这道闸让「cwd 静默失效」永远不会被误判成原生支持。
 - **`dsh-subagent` 导入是纯函数白名单。** 运行时存在两份 `@deepseek-ai/dsh-subagent` 实体副本（harness 的与本仓库 peer 安装的）。本插件只从自己的副本导入纯函数（`assertSubagentMaxDepth`、`settleRun`）—— 无模块态、无 Symbol 身份 —— 一切服务访问走 `ctx`。该副本**有意不**符号链接到 live 根：过期的实体副本照样给出正确的纯函数，而 npx 换 hash 后悬空的链接会让整个插件加载失败（我们已知的最脆失效模式）。`npm run lint` 强制执行该白名单。
 - **脱敏默认开在捕获边界。** 脱敏器（移植自 task-weaver `redact.ts`）在 CLI stdout/stderr 被捕获的那一刻（`lib/run.js`）与 ACP 桥直连 stdio 的文本进入缓冲处洗掉五种常见秘密形态，另对每个 bridge 返回的最终文本做幂等兜底。任务文本**入向不脱敏** —— 只洗回来的输出。被脱敏后不再能解析为 JSONL 的行会被丢弃、绝不原文透传（fail closed）。`redactSecrets: false` 恢复字节精确输出。
 - **grok 桥在无字面 `--` 的情况下防住 flag 注入。** grok 1.0.4 的 clap 解析器拒绝 `-p -- <task>`，因此任务文本以**附值**形态传输：`--single=<task>` —— `=` 之后的一切是一个字面 prompt 值，解析器永不把它重析为 flag（已对本机安装的 CLI 实测：以 `-` 开头的任务仍是任务文本）。这在 grok 自身解析器约束下保住了设计规则 7 的实质（规则 7 字面形态的唯一获准例外，已在 AGENTS.md 注明）；所有真正的 flag 值（model、sessionId 等）仍经与 claude/codex 桥相同的标识符白名单。该桥以内置 **`grok-native`** 注册 —— 裸名 `grok` 归用户 `config.providers` 所有（既有部署即 ACP 传输，其持久注册表会话继续原样工作）。
