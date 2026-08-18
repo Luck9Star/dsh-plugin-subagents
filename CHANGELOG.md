@@ -35,6 +35,11 @@ official `subagent` / `subagent_fork` tool names.
   names from all past commits and commit messages (pre-rewrite mirror
   backup kept locally).
 
+### CI (2026-08-18)
+
+- Added gitleaks secret scanning: `.github/workflows/gitleaks.yml` (full
+  history scan on every push/PR) and `.pre-commit-config.yaml` for local
+  commits; matches the gateway-provider repo's setup.
 ### Documentation (2026-08-18)
 
 - Both READMEs (`README.md` / `README.zh.md`) updated in lockstep, kept
