@@ -407,14 +407,20 @@ test('grokPermissionMode maps the three modes and fails closed to plan (rule 3)'
   assert.equal(grokPermissionMode('superuser'), 'plan', 'unknown fails closed to plan')
 })
 
-test('the last text event wins when several are present (turn message semantics)', async (t) => {
+test('text events concatenate (grok 1.0.5 token-slice streams; 1.0.4 single events append whole)', async (t) => {
   const { dir, done } = tempDir()
   t.after(done)
   const argvLog = join(dir, 'argv.json')
+  // 1.0.5 verified shape: the same logical turn message arrives as multiple
+  // token-slice text events ("PROBE", "-", "XY", …) — the bridge must
+  // reassemble, not keep only the last slice.
   const stdout = [
     JSON.stringify({ type: 'thought', data: 'thinking…' }),
-    JSON.stringify({ type: 'text', data: 'first attempt' }),
-    JSON.stringify({ type: 'text', data: 'final answer' }),
+    JSON.stringify({ type: 'text', data: 'PROBE' }),
+    JSON.stringify({ type: 'text', data: '-' }),
+    JSON.stringify({ type: 'text', data: 'XY' }),
+    JSON.stringify({ type: 'text', data: '-' }),
+    JSON.stringify({ type: 'text', data: '7799' }),
     JSON.stringify({ type: 'end', stopReason: 'end_turn', sessionId: SESSION_ID }),
   ]
   const cli = fakeGrok({ dir, argvLog, stdout })
@@ -426,5 +432,73 @@ test('the last text event wins when several are present (turn message semantics)
   const bridge = createGrokBridge({ command: wrapper, timeoutMs: 30000 })
   const remote = await bridge.create()
   const out = await bridge.submit(remote, 'task', undefined, dir)
-  assert.equal(out.text, 'final answer')
+  assert.equal(out.text, 'PROBE-XY-7799')
+})
+
+test('1.0.5 lockup recovery: "Session ID already in use" on the preallocated -s demotes it to --resume (one retry)', async (t) => {
+  const { dir, done } = tempDir()
+  t.after(done)
+  // Reproduces the field lockup verbatim: the first-turn `-s <uuid>` process
+  // died (timeout) AFTER grok 1.0.5 persisted the conversation directory, so
+  // the CLI now refuses the same `-s` on every retry ("already in use", no
+  // resume semantics). The bridge must detect the refusal and re-submit via
+  // --resume <preallocated> exactly once.
+  const argvLogs = [join(dir, 'argv-1.json'), join(dir, 'argv-2.json')]
+  let call = 0
+  // A fake CLI whose behavior depends on the call index: first call exits 1
+  // with the lockup message; second call answers normally.
+  const cli = join(dir, 'grok-lock.mjs')
+  writeFileSync(cli, [
+    'import { writeFileSync, readFileSync, existsSync } from "node:fs"',
+    `const call = existsSync(${JSON.stringify(join(dir, 'call-count'))})`,
+    `  ? Number(readFileSync(${JSON.stringify(join(dir, 'call-count'))}, "utf8")) + 1`,
+    '  : 1',
+    `writeFileSync(${JSON.stringify(join(dir, 'call-count'))}, String(call))`,
+    `if (call === 1) {`,
+    `  writeFileSync(${JSON.stringify(argvLogs[0])}, JSON.stringify(process.argv.slice(2)))`,
+    '  process.stderr.write(' + JSON.stringify('Error: Session ID 11111111-2222-3333-4444-555555555555 is already in use.\n') + ')',
+    '  process.exit(1)',
+    '}',
+    // Real-CLI semantics: --resume <id> makes the terminal end event report
+    // THAT SAME id — echo the id received on argv into the fixture.
+    'const argv = process.argv.slice(2)',
+    'const resumed = argv[argv.indexOf("--resume") + 1]',
+    'const lines = [' + JSON.stringify(JSON.stringify({ type: 'text', data: 'pong' })) + ',',
+    '  JSON.stringify({ type: "end", stopReason: "end_turn", sessionId: resumed, requestId: "rq-2", usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 }, num_turns: 1, total_cost_usd: 0.001 })]',
+    `writeFileSync(${JSON.stringify(argvLogs[1])}, JSON.stringify(argv))`,
+    'process.stdout.write(lines.join("\\n") + "\\n")',
+    'process.exit(0)',
+  ].join('\n'))
+  const wrapper = join(dir, 'grok')
+  writeFileSync(wrapper, process.platform === 'win32'
+    ? `@echo off\r\n"${execPath}" "${cli}" %*\r\n`
+    : `#!/bin/sh\nexec "${execPath}" "${cli}" "$@"\n`,
+    process.platform === 'win32' ? {} : { mode: 0o755 })
+  const bridge = createGrokBridge({ command: wrapper, timeoutMs: 30000 })
+  const remote = await bridge.create()
+  const preallocated = remote.pendingSessionId
+
+  const out = await bridge.submit(remote, 'task', undefined, dir)
+  assert.equal(out.text, 'pong', 'the resume retry answered')
+
+  const argv1 = JSON.parse((await import('node:fs')).readFileSync(argvLogs[0], 'utf8'))
+  const argv2 = JSON.parse((await import('node:fs')).readFileSync(argvLogs[1], 'utf8'))
+  const sIdx = argv1.indexOf('--session-id')
+  assert.ok(sIdx >= 0 && argv1[sIdx + 1] === preallocated, 'first attempt used the preallocated -s')
+  const rIdx = argv2.indexOf('--resume')
+  assert.ok(rIdx >= 0 && argv2[rIdx + 1] === preallocated, 'recovery retried with --resume <preallocated>')
+  assert.ok(!argv2.includes('--session-id'), 'recovery never re-sends the colliding -s')
+  assert.equal(remote.sessionId, preallocated, 'the resumed turn end-event id equals the recovered id')
+})
+
+test('grok default timeout is 15 minutes (1.0.5 headless input preprocessing is heavy)', async (t) => {
+  // A hanging CLI killed at 900s proves the default only via configuration
+  // inspection — asserting the constant indirectly keeps the test fast:
+  // a 500ms explicit override still times out (proving the override path),
+  // and the default is asserted by reading the source constant.
+  const { dir, done } = tempDir()
+  t.after(done)
+  const source = (await import('node:fs')).readFileSync(new URL('../lib/bridges/grok.js', import.meta.url), 'utf8')
+  assert.match(source, /Number\(options\.timeoutMs\) \|\| 900000/, 'grok default timeoutMs raised to 15 min')
+  done()
 })

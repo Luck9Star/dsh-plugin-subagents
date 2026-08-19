@@ -192,6 +192,7 @@ examples: [docs/dispatch-seam.md](docs/dispatch-seam.md).
 | `subagent: backend "codex" is not available: command "codex" not found on PATH` | The CLI is not installed. Install and log in (`codex login`), restart dsh. `subagent_agents` shows hints for every backend. |
 | `cwd` seems ignored after a dsh upgrade | Re-run `./patches/install.sh` — the cwd patch must be re-applied after every dsh upgrade. |
 | `subagent: permission escalation blocked …` | Working as designed: a child tried to spawn a higher-permission descendant. |
+| grok-native answers with a single character, or every retry fails with `Session ID ... is already in use` | Fixed: grok CLI 1.0.5 streams `text` events as token slices and refuses a reused `-s` id. Update this plugin — the parser now concatenates slices, the lockup falls back to `--resume`, and the default timeout is 15 minutes. |
 | Duplicate-provider registration errors at startup | Another plugin in the same profile registers the same bridge backends or takes over `subagent`. Remove one of them: edit the profile's `cordis.patch.yml`, then `pnpm remove` that package, then reinstall this one. |
 
 ## Works well with

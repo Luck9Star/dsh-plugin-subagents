@@ -152,6 +152,7 @@ subagent({ role: "code-review", prompt: "审查暂存区的 diff。" })
 | `subagent: backend "codex" is not available: command "codex" not found on PATH` | CLI 没装。安装并登录（`codex login`）后重启 dsh。`subagent_agents` 对每个后端都有提示。 |
 | dsh 升级后 `cwd` 好像失效了 | 重跑 `./patches/install.sh` —— 每次 dsh 升级后都要重新打 cwd 补丁。 |
 | `subagent: permission escalation blocked …` | 这是设计行为：某个子代理试图生出权限更高的后代，被拦下了。 |
+| grok-native 只回一个字符，或每次重试都报 `Session ID ... is already in use` | 已修复：grok CLI 1.0.5 把 `text` 事件改成了分片流、且拒绝复用已存在的 `-s` 会话号。更新本插件即可 —— 解析器现在拼接分片、锁死会自动回退 `--resume`、默认超时提到 15 分钟。 |
 | 启动时报重复注册 provider 的错误 | 同一 profile 里有别的插件注册了同名桥接后端，或同样接管了 `subagent`。二选一：编辑 profile 的 `cordis.patch.yml` 删掉那边，`pnpm remove` 对应包，再重装本插件。 |
 
 ## 搭配使用

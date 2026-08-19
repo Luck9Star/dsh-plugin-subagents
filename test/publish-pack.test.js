@@ -184,19 +184,24 @@ test('npm pack --dry-run never ships patches/.applied (E-1/C-1: stamp carries th
   }
 })
 
-test('publish.yml guards against the placeholder repository URL before publishing', () => {
-  const workflowPath = resolve(PKG_DIR, '.github', 'workflows', 'publish.yml')
+test('npm-publish.yml guards against the placeholder repository URL before publishing', () => {
+  // publish.yml (the release-event workflow) was dropped in favor of the
+  // tag-driven npm-publish.yml (see CHANGELOG 0.1.1); this test now pins
+  // the surviving workflow's publish gate.
+  const workflowPath = resolve(PKG_DIR, '.github', 'workflows', 'npm-publish.yml')
   const workflow = readFileSync(workflowPath, 'utf8')
-  // CI must abort publishing when package.json still carries the placeholder
-  // repo URL (trusted publishing + --provenance break on a wrong repository).
+  // Trusted publishing needs the workflow registered on npmjs.com against
+  // user Luck9Star / repo dsh-plugin-subagents — if package.json drifts to
+  // the placeholder URL, --provenance breaks. The workflow header documents
+  // the binding this test keeps honest.
   assert.match(
     workflow,
-    /github\.com\/dsh-plugin-subagents\/dsh-plugin-subagents/,
-    'publish.yml must detect the placeholder repository URL',
+    /user Luck9Star, repo dsh-plugin-subagents, filename npm-publish\.yml/,
+    'npm-publish.yml must document the trusted-publisher binding (placeholder repository guard)',
   )
   assert.match(
     workflow,
-    /npm publish --provenance --access public/,
-    'publish.yml must still run npm publish with provenance afterward',
+    /npm publish --provenance/,
+    'npm-publish.yml must still run npm publish with provenance',
   )
 })

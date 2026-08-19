@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed — grok-native bridge vs grok CLI 1.0.5
+
+Field diagnosis: every grok-native relay session locked up permanently
+("Session ID ... is already in use" on all retries) after one initial
+turn timeout, with degraded sessions answering only the last character
+of each reply. Two independent defects, both verified against a live
+1.0.5 install:
+
+- **Streaming parser**: grok 1.0.5 emits `text` events as token-slice
+  deltas (`"PROBE"`, `"-"`, `"XY"`, ...), where 1.0.4 emitted one full
+  message per turn. The bridge's last-event-wins assignment kept only
+  the final slice — answers arrived truncated to one character. `text`
+  events now concatenate, which also preserves the 1.0.4 single-event
+  shape.
+- **Session-id lockup recovery**: 1.0.5 persists the conversation
+  directory before the terminal `end` event, so a turn killed by the
+  timeout leaves the preallocated `-s <uuid>` taken while the bridge
+  never learns the id. 1.0.5's `-s` REFUSES an existing id and does NOT
+  resume, so every retry re-sent the same `-s` and failed forever. The
+  bridge now detects the "already in use" refusal and retries once via
+  `--resume <preallocated>` (verified legal and lossless on a live
+  locked session).
+- **Timeout default**: the grok default `timeoutMs` rises from 5 to 15
+  minutes — a trivial 1.0.5 probe already reports ~37k input tokens of
+  CLI-injected skills/MCP inventory before the task text, and
+  relay-scale task briefs need far more than 5 minutes of wall time.
+
 ## [0.1.1] - 2026-08-18
 
 First release through the npm trusted-publishing pipeline (OIDC, tag
