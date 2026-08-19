@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-subagents",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Unified subagent provider plugin for the DeepSeek Harness: native in-process subagents with per-call overrides and ACP/Claude Code/Codex bridge subagents with a declarative role library, a delegation permission ceiling, and durable session recovery.",
   "type": "module",
   "main": "lib/index.js",
